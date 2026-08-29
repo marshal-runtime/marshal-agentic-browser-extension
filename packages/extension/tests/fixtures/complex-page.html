@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Complex Test Page</title>
+  </head>
+  <body>
+    <header role="banner">
+      <nav role="navigation" aria-label="Main navigation">
+        <ul>
+          <li><a href="/">Home</a></li>
+          <li><a href="/about">About</a></li>
+          <li><a href="/contact">Contact</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main role="main">
+      <h1>Complex Test Page</h1>
+
+      <section aria-label="Data table section">
+        <h2>Product Table</h2>
+        <table id="products">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Price</th>
+              <th>Stock</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Widget A</td>
+              <td>$9.99</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td>Widget B</td>
+              <td>$19.99</td>
+              <td>15</td>
+            </tr>
+            <tr>
+              <td>Widget C</td>
+              <td>$4.99</td>
+              <td>100</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-label="Form section">
+        <h2>Contact Form</h2>
+        <form id="contact-form" aria-label="Contact form">
+          <div>
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" required aria-required="true" />
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required aria-required="true" />
+          </div>
+          <div>
+            <label for="category">Category</label>
+            <select id="category" name="category">
+              <option value="general">General</option>
+              <option value="support">Support</option>
+              <option value="sales">Sales</option>
+            </select>
+          </div>
+          <div>
+            <label for="message">Message</label>
+            <textarea id="message" name="message" rows="4"></textarea>
+          </div>
+          <button type="submit" aria-label="Submit form">Submit</button>
+        </form>
+      </section>
+
+      <section aria-label="Interactive elements">
+        <h2>Interactive Elements</h2>
+        <button id="toggle-btn" aria-pressed="false">Toggle</button>
+        <div role="tablist" aria-label="Sample tabs">
+          <button role="tab" aria-selected="true" aria-controls="panel-1">Tab 1</button>
+          <button role="tab" aria-selected="false" aria-controls="panel-2">Tab 2</button>
+        </div>
+        <div id="panel-1" role="tabpanel" aria-labelledby="tab-1">Panel 1 content</div>
+        <div id="panel-2" role="tabpanel" aria-labelledby="tab-2" hidden>Panel 2 content</div>
+      </section>
+
+      <section aria-label="Dynamic content">
+        <h2>Dynamic Content</h2>
+        <div id="dynamic-container" data-loaded="false" data-timestamp="1700000000">
+          <p class="status">Loading...</p>
+        </div>
+      </section>
+    </main>
+
+    <footer role="contentinfo">
+      <p>&copy; 2026 Test Page</p>
+    </footer>
+  </body>
+</html>

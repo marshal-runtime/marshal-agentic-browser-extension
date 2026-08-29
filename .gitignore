@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.agent-memory/**
+.roo/**
+.temp/**
+/.factory/
+/.roomodes
+/agent-packs/fabric-compliance/
+/assessment.SKILL.md
+/compliance-assessment-report.md
+/docs/fabric-compliance.md
+/login-page.png
+# Coverage
+coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Extension packages
+*.crx
+*.pem
+web-ext-artifacts/
+
+# TypeScript build artifacts
+*.tsbuildinfo
+
+# Generated config output (compiled from .ts config files)
+vitest.config.js
+vitest.config.d.ts
+vitest.config.d.ts.map
+vitest.config.js.map
+webpack.config.js
+webpack.config.d.ts
+webpack.config.d.ts.map
+webpack.config.js.map

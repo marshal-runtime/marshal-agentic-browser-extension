@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist/types",
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "tsBuildInfoFile": "node_modules/.cache/runtime-extension.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "tests"],
+  "references": [
+    { "path": "../shared" },
+    { "path": "../runtime-panel" },
+    { "path": "../mcp-server" }
+  ]
+}

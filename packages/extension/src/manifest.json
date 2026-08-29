@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "Agentic Browser",
+  "version": "0.1.0",
+  "description": "Browser control platform for AI agents — MCP-compatible extension providing navigation, DOM interaction, screenshots, and more.",
+  "incognito": "spanning",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage",
+    "webNavigation",
+    "nativeMessaging",
+    "sidePanel"
+  ],
+  "optional_permissions": ["debugger", "bookmarks", "history", "downloads", "cookies"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_page": "options.html",
+  "side_panel": {
+    "default_path": "runtime-panel.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "storage": {
+    "managed_schema": "managed-storage-schema.json"
+  },
+  "minimum_chrome_version": "120"
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@agentic-browser/marshal-runtime-extension",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "dist/runtime.cjs",
+  "types": "dist/types/runtime.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/runtime.d.ts",
+      "require": "./dist/runtime.cjs",
+      "default": "./dist/runtime.cjs"
+    },
+    "./host": {
+      "types": "./dist/types/host.d.ts",
+      "require": "./dist/host.cjs",
+      "default": "./dist/host.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "runtime-extension.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rimraf dist && tsc --build --force tsconfig.json && node build.mjs",
+    "clean": "rimraf dist",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@agentic-browser/mcp-server": "*",
+    "@agentic-browser/shared": "*",
+    "@marshal/runtime-browser-panel": "*",
+    "esbuild": "0.25.12"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

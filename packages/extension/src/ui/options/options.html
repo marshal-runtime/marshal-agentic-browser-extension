@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentic Browser — Options</title>
+  </head>
+  <body>
+    <main id="options-root">
+      <h1 class="ab-title">Agentic Browser — Options</h1>
+      <p class="ab-version" id="options-version"></p>
+      <div class="ab-status" id="options-status" role="status" aria-live="polite">
+        <span class="ab-status-indicator" id="options-status-dot" aria-hidden="true"></span>
+        <span id="options-status-label">Disconnected</span>
+      </div>
+
+      <section class="ab-section">
+        <h2 class="ab-section-title">Connection</h2>
+        <div class="ab-field">
+          <label class="ab-label" for="opt-auto-connect">Auto-connect on startup</label>
+          <input type="checkbox" id="opt-auto-connect" class="ab-checkbox" />
+        </div>
+      </section>
+
+      <section class="ab-section">
+        <h2 class="ab-section-title">Security</h2>
+        <div class="ab-field">
+          <label class="ab-label" for="opt-allowed-domains">Allowed domains</label>
+          <textarea
+            id="opt-allowed-domains"
+            class="ab-textarea"
+            rows="4"
+            placeholder="One domain per line, e.g. example.com"
+          ></textarea>
+          <p class="ab-help">Leave empty to allow all domains.</p>
+        </div>
+        <div class="ab-field">
+          <button id="opt-enable-debugger" class="ab-btn ab-btn--secondary">
+            Enable browser debugging
+          </button>
+          <p class="ab-help">
+            Required for local Chrome/Edge CDP tools. Remote browser backends do not use this
+            permission.
+          </p>
+          <p id="opt-debugger-status" class="ab-help" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="ab-section">
+        <h2 class="ab-section-title">Logging</h2>
+        <div class="ab-field">
+          <label class="ab-label" for="opt-log-level">Log level</label>
+          <select id="opt-log-level" class="ab-select">
+            <option value="debug">Debug</option>
+            <option value="info" selected>Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="ab-section">
+        <h2 class="ab-section-title">MCP Server</h2>
+        <div class="ab-field">
+          <label class="ab-label" for="opt-mcp-toggle">Enable MCP Server</label>
+          <input type="checkbox" id="opt-mcp-toggle" class="ab-checkbox" />
+        </div>
+      </section>
+
+      <div class="ab-actions">
+        <button id="opt-save" class="ab-btn ab-btn--primary">Save</button>
+        <button id="opt-reset" class="ab-btn ab-btn--secondary">Reset to defaults</button>
+      </div>
+
+      <p class="ab-save-status" id="opt-save-status" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

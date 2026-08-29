@@ -1,0 +1,9 @@
+.agent-memory/
+.roo/
+.temp/
+node_modules/
+dist/
+build/
+*.png
+*.d.ts.map
+*.js.map

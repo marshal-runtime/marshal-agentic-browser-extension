@@ -1,0 +1,30 @@
+{
+  "name": "@agentic-browser/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "npm run build -w @agentic-browser/shared && npm run build -w @marshal/runtime-browser-panel",
+    "build": "webpack --config webpack.config.ts --mode production",
+    "dev": "webpack --config webpack.config.ts --mode development --watch",
+    "clean": "rimraf build dist",
+    "package": "web-ext build --source-dir build --artifacts-dir dist"
+  },
+  "dependencies": {
+    "@agentic-browser/shared": "*",
+    "@marshal/runtime-browser-panel": "*"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.287",
+    "copy-webpack-plugin": "12.0.2",
+    "css-loader": "^7.1.3",
+    "esbuild-loader": "4.3.0",
+    "html-webpack-plugin": "5.6.3",
+    "style-loader": "^4.0.0",
+    "ts-node": "10.9.2",
+    "web-ext": "8.4.0",
+    "webpack": "5.97.1",
+    "webpack-cli": "6.0.1",
+    "webpack-merge": "6.0.1"
+  }
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentic Browser</title>
+  </head>
+  <body>
+    <main id="popup-root">
+      <h1 class="ab-title">Agentic Browser</h1>
+      <p class="ab-version" id="popup-version"></p>
+      <div class="ab-status" id="popup-status" role="status" aria-live="polite">
+        <span class="ab-status-indicator" id="popup-status-dot" aria-hidden="true"></span>
+        <span id="popup-status-label">Disconnected</span>
+      </div>
+
+      <div class="ab-section">
+        <h2 class="ab-section-title">MCP Server</h2>
+        <div class="ab-toggle-row">
+          <label class="ab-toggle-label" for="mcp-toggle">Enable MCP Server</label>
+          <button
+            id="mcp-toggle"
+            class="ab-toggle"
+            role="switch"
+            aria-checked="false"
+            aria-label="Toggle MCP server on or off"
+          >
+            <span class="ab-toggle-track">
+              <span class="ab-toggle-thumb"></span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div class="ab-section">
+        <h2 class="ab-section-title">Active Agents</h2>
+        <ul class="ab-agent-list" id="popup-agents" aria-label="Connected agents">
+          <li class="ab-agent-empty" id="popup-no-agents">No agents connected</li>
+        </ul>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+export { CDPManager, CDPError } from './cdp-manager.js';
+export type { CDPEventListener } from './cdp-manager.js';
+export { Logger, logger } from './logger.js';
+export type { LogLevel, LogEntry } from './logger.js';
+export { StateManager, stateManager } from './state-manager.js';
+export { CheckpointManager, checkpointManager } from './checkpoint-manager.js';
+export type { CheckpointData, StepResult, DiagnosticContext } from './checkpoint-manager.js';
+export { TabTracker } from './tab-tracker.js';
+export type { TabState } from './tab-tracker.js';
+export { SessionManager, getSessionManager } from './session-manager.js';
+export type { SessionState, TabSessionInfo, ConnectionInfo, ScrollPosition } from './session-manager.js';

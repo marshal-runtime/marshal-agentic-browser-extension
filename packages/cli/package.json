@@ -1,0 +1,24 @@
+{
+  "name": "@agentic-browser/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "agentic-browser": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build --force tsconfig.json",
+    "dev": "tsc --watch --project tsconfig.json",
+    "start": "node dist/index.js",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@agentic-browser/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.4"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

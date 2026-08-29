@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "identity": "@agentic-browser/marshal-runtime-extension",
+  "version": "0.1.0",
+  "entrypoint": "dist/runtime.cjs",
+  "moduleFormat": "commonjs-bundle-v1"
+}
