@@ -13,7 +13,8 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@agentic-browser/shared": "*"
+    "@agentic-browser/shared": "*",
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@types/node": "22.13.4"

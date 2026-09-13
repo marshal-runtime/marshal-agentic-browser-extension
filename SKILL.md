@@ -5,7 +5,12 @@ description: Whenever you need to use a browser, supports headless and full user
 
 # Agentic Browser
 
-CLI tool for browser automation via Chrome DevTools Protocol. Every command returns JSON with `"success": true|false`.
+CLI tool for browser automation. Every command returns JSON with `"success": true|false`.
+
+Two engines, chosen at `setup`:
+
+- `--browser chrome|edge` (default) — your installed browser via Chrome DevTools Protocol, **with your real user profile** (cookies, logins).
+- `--browser webkit|safari` — **Playwright WebKit** (the engine Safari uses). This is NOT your installed Safari: fresh ephemeral profile, no Safari cookies/logins/extensions. Use it to test WebKit/Safari rendering and behavior.
 
 ## Quick Start
 
@@ -16,7 +21,14 @@ agentic-browser screenshot --output page.png
 agentic-browser shutdown
 ```
 
-Setup flags: `--headless`, `--browser edge|chrome`, `--port N`, `--profile "Profile 1"`, `--expose`
+```bash
+agentic-browser setup --browser safari --headless   # WebKit engine (ephemeral profile)
+agentic-browser navigate "https://example.com"
+agentic-browser screenshot --output page.png
+agentic-browser shutdown
+```
+
+Setup flags: `--headless`, `--browser edge|chrome|webkit|safari`, `--port N`, `--profile "Profile 1"` (chrome/edge only), `--expose` (chrome/edge only)
 
 ---
 
@@ -181,11 +193,11 @@ Presets: `iphone-14`, `iphone-14-pro-max`, `pixel-7`, `ipad-pro`, `galaxy-s23`
 
 ## Global Options
 
-| Flag              | Default     | Description                              |
-| ----------------- | ----------- | ---------------------------------------- |
-| `--port <N>`      | `9222`      | CDP debugging port                       |
-| `--host <addr>`   | `127.0.0.1` | CDP host (for remote browsers)           |
-| `--target <id>`   | *(auto)*    | Connect to a specific CDP target by ID   |
+| Flag            | Default     | Description                            |
+| --------------- | ----------- | -------------------------------------- |
+| `--port <N>`    | `9222`      | CDP debugging port                     |
+| `--host <addr>` | `127.0.0.1` | CDP host (for remote browsers)         |
+| `--target <id>` | _(auto)_    | Connect to a specific CDP target by ID |
 
 ---
 
@@ -193,16 +205,31 @@ Presets: `iphone-14`, `iphone-14-pro-max`, `pixel-7`, `ipad-pro`, `galaxy-s23`
 
 `setup` auto-loads your Chrome/Edge user profile (cookies, logins, extensions). If the profile is locked (browser already running), it falls back to the alternate browser or creates a temp profile with copied cookies. Use `profile-info` to verify.
 
+The webkit engine always uses a fresh ephemeral profile — there is no way to load your Safari profile (driving the real Safari.app via safaridriver is a documented non-goal; see `docs/safari-webkit.md`).
+
+## WebKit Engine Support Matrix
+
+Everything works on webkit except the CDP-only surface, which fails fast with a clear error instead of misbehaving:
+
+| Category                                                                                                                                                                         | webkit engine                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Navigation, click/type/keyboard/drag, screenshot, html, accessibility-tree, extract-data, execute, waits, tabs, dialogs, upload/download, cookies, network-log, DOM modification | ✅ Full support                                                                          |
+| `reload --hard`                                                                                                                                                                  | ⚠️ Normal reload (no cache bypass), noted in result                                      |
+| `emulate-device`                                                                                                                                                                 | ⚠️ Viewport size/orientation only — no user-agent, deviceScaleFactor, or touch emulation |
+| `connect`, `list-targets`, `--target` (iframes/workers), `--expose`, `--host`, `--profile`                                                                                       | ❌ CDP-only — clear "not supported on the webkit engine" error                           |
+
+Tab IDs on webkit are `wk1`, `wk2`, … (prefix matching works). Cross-origin iframe access (`--target`) requires the chrome/edge engine.
+
 ---
 
 ## Error Recovery
 
-| Error | Fix |
-|-------|-----|
-| `No browser on port 9222` | Run `setup` first |
-| `Element not found` | Use `wait-for-selector` before interacting |
-| `WebSocket closed` | Tab closed — `list-tabs` + `switch-tab` |
-| `Browser did not start` | Close existing instances using same profile |
+| Error                     | Fix                                         |
+| ------------------------- | ------------------------------------------- |
+| `No browser on port 9222` | Run `setup` first                           |
+| `Element not found`       | Use `wait-for-selector` before interacting  |
+| `WebSocket closed`        | Tab closed — `list-tabs` + `switch-tab`     |
+| `Browser did not start`   | Close existing instances using same profile |
 
 **Pattern for dynamic pages:** `navigate` → `wait-for-network-idle` → `wait-for-selector` → interact.
 
@@ -213,4 +240,4 @@ Presets: `iphone-14`, `iphone-14-pro-max`, `pixel-7`, `ipad-pro`, `galaxy-s23`
 - CDP is unauthenticated — never use `--expose` on public networks.
 - `setup` without `--expose` binds to `127.0.0.1` only.
 - For remote control, use an SSH tunnel: `ssh -L 9222:127.0.0.1:9222 user@host`
-w
+  w

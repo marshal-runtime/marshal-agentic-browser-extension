@@ -2,13 +2,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 
-const CONFIG_DIR = join(homedir(), '.agentic-browser');
+// AGENTIC_BROWSER_CONFIG_DIR lets tests (and parallel engine setups) use an
+// isolated state directory instead of the user's real one.
+const CONFIG_DIR = process.env['AGENTIC_BROWSER_CONFIG_DIR'] ?? join(homedir(), '.agentic-browser');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 export interface Config {
   port: number;
   host: string;
-  browser: 'chrome' | 'edge';
+  browser: 'chrome' | 'edge' | 'webkit';
+  /** 'cdp' (Chrome/Edge, the default) or 'webkit' (Playwright WebKit daemon). */
+  engine?: 'cdp' | 'webkit';
   currentTargetId?: string;
   profileDir?: string;
 }
@@ -40,4 +44,8 @@ export function saveConfig(config: Partial<Config>): void {
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
+}
+
+export function getConfigDir(): string {
+  return CONFIG_DIR;
 }
