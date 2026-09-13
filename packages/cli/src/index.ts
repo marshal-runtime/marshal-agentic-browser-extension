@@ -3,12 +3,16 @@
 /**
  * Agentic Browser CLI
  *
- * A standalone command-line tool for AI agents to control browsers
- * via the Chrome DevTools Protocol. No extension, no MCP server —
- * just a CLI that talks directly to your browser.
+ * A standalone command-line tool for AI agents to control browsers.
+ * Two engines:
+ *   - chrome|edge (default): raw Chrome DevTools Protocol against your
+ *     installed browser, with your real user profile.
+ *   - webkit|safari: Playwright WebKit via a local daemon. This is the
+ *     WebKit engine (what Safari uses), NOT your installed Safari.app —
+ *     fresh ephemeral profile, no Safari cookies/logins.
  *
  * Usage:
- *   agentic-browser setup [--browser chrome|edge] [--port 9222] [--headless]
+ *   agentic-browser setup [--browser chrome|edge|webkit|safari] [--port 9222] [--headless]
  *   agentic-browser <command> [options]
  *
  * All commands print JSON to stdout. Diagnostic messages go to stderr.
@@ -18,6 +22,8 @@ import { parseArgs } from 'node:util';
 import { loadConfig, saveConfig } from './config.js';
 import { setCDPHost, getVersion } from './cdp.js';
 import { launchBrowser, shutdownBrowser } from './launcher.js';
+import { normalizeBrowserFlag } from './engine.js';
+import { runWebkitCommand } from './webkit-client.js';
 import * as cmd from './commands.js';
 import { setTargetOverride } from './commands.js';
 
@@ -114,10 +120,18 @@ OPTIONS:
   --target <id>               Connect to a specific CDP target (use list-targets to find IDs)
                               Works on ANY command (click, type, screenshot, execute, etc.)
                               Supports prefix matching — you don't need the full ID
-  --browser <chrome|edge>     Preferred browser for setup
+  --browser <name>            Browser engine for setup:
+                                chrome|edge  — your installed browser via CDP,
+                                               loads your real user profile
+                                webkit|safari — Playwright WebKit engine (the
+                                               engine Safari uses). NOT your
+                                               installed Safari: fresh ephemeral
+                                               profile, no Safari cookies/logins.
+                                               No CDP: connect/list-targets/--target
+                                               and UA emulation are unavailable.
   --headless                  Launch in headless mode
-  --expose                    Bind to 0.0.0.0 so remote agents can connect
-  --profile <name>            Chrome profile directory name (e.g., "Profile 1")
+  --expose                    Bind to 0.0.0.0 so remote agents can connect (chrome/edge only)
+  --profile <name>            Chrome profile directory name (e.g., "Profile 1"; chrome/edge only)
   --help                      Show this help message
 
 EXAMPLES:
@@ -232,17 +246,40 @@ async function main(): Promise<void> {
   let result: { success: boolean; [key: string]: unknown };
 
   try {
+    // Engine selection: --browser webkit|safari → Playwright WebKit daemon;
+    // chrome|edge (or no flag) → raw CDP. After a webkit setup, saved config
+    // routes follow-up commands to the daemon.
+    const selection = normalizeBrowserFlag(str(values['browser']));
+    const engine = selection?.engine ?? config.engine ?? 'cdp';
+
+    if (engine === 'webkit') {
+      result = await runWebkitCommand(command, {
+        port,
+        host,
+        values: values as Record<string, string | boolean | undefined>,
+        positionals,
+      });
+      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      process.exit(result.success ? 0 : 1);
+    }
+
     switch (command) {
       // -- Lifecycle --
       case 'setup': {
+        const cdpPreferred =
+          selection?.browser === 'chrome' || selection?.browser === 'edge'
+            ? selection.browser
+            : config.browser === 'chrome' || config.browser === 'edge'
+              ? config.browser
+              : undefined;
         const info = await launchBrowser({
-          browser: (str(values['browser']) as 'chrome' | 'edge' | undefined) ?? config.browser,
+          browser: cdpPreferred,
           port,
           headless: values['headless'] === true,
           expose: values['expose'] === true,
           profile: str(values['profile']),
         });
-        saveConfig({ port, host: '127.0.0.1', browser: info.browser });
+        saveConfig({ port, host: '127.0.0.1', browser: info.browser, engine: 'cdp' });
         result = {
           success: true,
           browser: info.browser,
@@ -262,7 +299,10 @@ async function main(): Promise<void> {
         if (connectVersion) {
           result = { success: true, connected: true, host, port, ...connectVersion };
         } else {
-          result = { success: false, error: `Cannot connect to browser at ${host}:${String(port)}` };
+          result = {
+            success: false,
+            error: `Cannot connect to browser at ${host}:${String(port)}`,
+          };
         }
         break;
       }
@@ -272,7 +312,11 @@ async function main(): Promise<void> {
         if (version) {
           result = { success: true, connected: true, host, port, ...version };
         } else {
-          result = { success: true, connected: false, message: `No browser at ${host}:${String(port)}` };
+          result = {
+            success: true,
+            connected: false,
+            message: `No browser at ${host}:${String(port)}`,
+          };
         }
         break;
       }
@@ -316,7 +360,10 @@ async function main(): Promise<void> {
         const rawX = num(values['x']);
         const rawY = num(values['y']);
         if (!selector && (rawX === undefined || rawY === undefined)) {
-          result = { success: false, error: 'Usage: agentic-browser click <selector>  OR  agentic-browser click --x N --y N' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser click <selector>  OR  agentic-browser click --x N --y N',
+          };
           break;
         }
         const clickModifiers = cmd.parseModifierFlags(str(values['modifiers']));
@@ -341,7 +388,11 @@ async function main(): Promise<void> {
           const selector = positionals[0];
           const text = positionals[1];
           if (!selector || !text) {
-            result = { success: false, error: 'Usage: agentic-browser type <selector> <text>  OR  agentic-browser type --text "hello"' };
+            result = {
+              success: false,
+              error:
+                'Usage: agentic-browser type <selector> <text>  OR  agentic-browser type --text "hello"',
+            };
             break;
           }
           result = await cmd.type(port, selector, text, values['clear'] === true);
@@ -387,7 +438,11 @@ async function main(): Promise<void> {
       case 'keyboard': {
         let keyCombo = positionals[0];
         if (!keyCombo) {
-          result = { success: false, error: 'Usage: agentic-browser keyboard <key>  (e.g. Tab, Enter, Control+a, Shift+ArrowDown)\n       agentic-browser keyboard <key> --modifiers ctrl,shift' };
+          result = {
+            success: false,
+            error:
+              'Usage: agentic-browser keyboard <key>  (e.g. Tab, Enter, Control+a, Shift+ArrowDown)\n       agentic-browser keyboard <key> --modifiers ctrl,shift',
+          };
           break;
         }
         // Merge --modifiers flag into the combo string
@@ -423,16 +478,16 @@ async function main(): Promise<void> {
         break;
 
       case 'accessibility-tree':
-        result = await cmd.accessibilityTree(
-          port,
-          num(values['max-depth']),
-        );
+        result = await cmd.accessibilityTree(port, num(values['max-depth']));
         break;
 
       case 'extract-data': {
         const type = positionals[0] ?? str(values['action']);
         if (!type) {
-          result = { success: false, error: 'Usage: agentic-browser extract-data <table|structured>' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser extract-data <table|structured>',
+          };
           break;
         }
         result = await cmd.extractData(port, type, str(values['selector']));
@@ -447,7 +502,10 @@ async function main(): Promise<void> {
       case 'execute': {
         const script = positionals[0];
         if (!script) {
-          result = { success: false, error: 'Usage: agentic-browser execute <script> [--target <target-id>]' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser execute <script> [--target <target-id>]',
+          };
           break;
         }
         const targetId = str(values['target' as keyof typeof values]);
@@ -481,8 +539,17 @@ async function main(): Promise<void> {
         const startY = num(values['start-y']);
         const endX = num(values['end-x']);
         const endY = num(values['end-y']);
-        if (startX === undefined || startY === undefined || endX === undefined || endY === undefined) {
-          result = { success: false, error: 'Usage: agentic-browser drag --start-x N --start-y N --end-x N --end-y N [--steps N] [--modifiers shift]' };
+        if (
+          startX === undefined ||
+          startY === undefined ||
+          endX === undefined ||
+          endY === undefined
+        ) {
+          result = {
+            success: false,
+            error:
+              'Usage: agentic-browser drag --start-x N --start-y N --end-x N --end-y N [--steps N] [--modifiers shift]',
+          };
           break;
         }
         result = await cmd.drag(
@@ -524,30 +591,23 @@ async function main(): Promise<void> {
       }
 
       case 'wait-for-navigation':
-        result = await cmd.waitForNavigation(
-          port,
-          num(values['timeout']),
-        );
+        result = await cmd.waitForNavigation(port, num(values['timeout']));
         break;
 
       case 'wait-for-network-idle':
-        result = await cmd.waitForNetworkIdle(
-          port,
-          num(values['timeout']),
-        );
+        result = await cmd.waitForNetworkIdle(port, num(values['timeout']));
         break;
 
       case 'wait-for-condition': {
         const expr = positionals[0];
         if (!expr) {
-          result = { success: false, error: 'Usage: agentic-browser wait-for-condition <expression>' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser wait-for-condition <expression>',
+          };
           break;
         }
-        result = await cmd.waitForCondition(
-          port,
-          expr,
-          num(values['timeout']),
-        );
+        result = await cmd.waitForCondition(port, expr, num(values['timeout']));
         break;
       }
 
@@ -600,17 +660,32 @@ async function main(): Promise<void> {
 
       // -- Dialog Handling --
       case 'handle-dialog': {
-        const action = (positionals[0] ?? str(values['action'])) as 'accept' | 'dismiss' | undefined;
+        const action = (positionals[0] ?? str(values['action'])) as
+          | 'accept'
+          | 'dismiss'
+          | undefined;
         if (!action || !['accept', 'dismiss'].includes(action)) {
-          result = { success: false, error: 'Usage: agentic-browser handle-dialog <accept|dismiss> --trigger <expr>' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser handle-dialog <accept|dismiss> --trigger <expr>',
+          };
           break;
         }
         const trigger = str(values['trigger']);
         if (!trigger) {
-          result = { success: false, error: 'Missing --trigger <expression>. Provide the JS that triggers the dialog.' };
+          result = {
+            success: false,
+            error: 'Missing --trigger <expression>. Provide the JS that triggers the dialog.',
+          };
           break;
         }
-        result = await cmd.handleDialog(port, action, trigger, str(values['prompt-text']), num(values['timeout']));
+        result = await cmd.handleDialog(
+          port,
+          action,
+          trigger,
+          str(values['prompt-text']),
+          num(values['timeout']),
+        );
         break;
       }
 
@@ -618,12 +693,18 @@ async function main(): Promise<void> {
       case 'upload-file': {
         const selector = positionals[0] ?? str(values['selector']);
         if (!selector) {
-          result = { success: false, error: 'Usage: agentic-browser upload-file <selector> <file...>' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser upload-file <selector> <file...>',
+          };
           break;
         }
         const files = positionals.slice(1);
         if (files.length === 0) {
-          result = { success: false, error: 'Usage: agentic-browser upload-file <selector> <file...>' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser upload-file <selector> <file...>',
+          };
           break;
         }
         result = await cmd.uploadFile(port, selector, files);
@@ -633,7 +714,10 @@ async function main(): Promise<void> {
       case 'download': {
         const dlUrl = positionals[0] ?? str(values['url']);
         if (!dlUrl) {
-          result = { success: false, error: 'Usage: agentic-browser download <url> [--output path]' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser download <url> [--output path]',
+          };
           break;
         }
         result = await cmd.download(port, dlUrl, str(values['output']), num(values['timeout']));
@@ -655,7 +739,10 @@ async function main(): Promise<void> {
         const cookieValue = str(values['value']);
         const cookieDomain = str(values['domain']);
         if (!cookieName || !cookieValue || !cookieDomain) {
-          result = { success: false, error: 'Usage: agentic-browser set-cookie --name X --value Y --domain D' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser set-cookie --name X --value Y --domain D',
+          };
           break;
         }
         result = await cmd.setCookie(port, {
@@ -675,7 +762,10 @@ async function main(): Promise<void> {
         const delName = str(values['name']);
         const delDomain = str(values['domain']);
         if (!delName || !delDomain) {
-          result = { success: false, error: 'Usage: agentic-browser delete-cookie --name X --domain D' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser delete-cookie --name X --domain D',
+          };
           break;
         }
         result = await cmd.deleteCookie(port, delName, delDomain);
@@ -697,7 +787,10 @@ async function main(): Promise<void> {
         const selector = positionals[0] ?? str(values['selector']);
         const attribute = positionals[1];
         if (!selector || !attribute) {
-          result = { success: false, error: 'Usage: agentic-browser modify-attribute <selector> <attribute> [value]' };
+          result = {
+            success: false,
+            error: 'Usage: agentic-browser modify-attribute <selector> <attribute> [value]',
+          };
           break;
         }
         result = await cmd.modifyAttribute(port, selector, attribute, positionals[2]);
@@ -708,14 +801,19 @@ async function main(): Promise<void> {
         const selector = positionals[0] ?? str(values['selector']);
         const html = positionals[1];
         if (!selector || !html) {
-          result = { success: false, error: 'Usage: agentic-browser insert-html <selector> <html> [--position beforebegin|afterbegin|beforeend|afterend]' };
+          result = {
+            success: false,
+            error:
+              'Usage: agentic-browser insert-html <selector> <html> [--position beforebegin|afterbegin|beforeend|afterend]',
+          };
           break;
         }
         result = await cmd.insertHTML(
           port,
           selector,
           html,
-          (str(values['position']) as 'beforebegin' | 'afterbegin' | 'beforeend' | 'afterend') ?? 'beforeend',
+          (str(values['position']) as 'beforebegin' | 'afterbegin' | 'beforeend' | 'afterend') ??
+            'beforeend',
         );
         break;
       }
@@ -731,7 +829,10 @@ async function main(): Promise<void> {
       }
 
       default:
-        result = { success: false, error: `Unknown command: ${command}. Run with --help for usage.` };
+        result = {
+          success: false,
+          error: `Unknown command: ${command}. Run with --help for usage.`,
+        };
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
