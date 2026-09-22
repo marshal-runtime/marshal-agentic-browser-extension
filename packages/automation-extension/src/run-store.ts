@@ -21,6 +21,8 @@ export interface RunRecord {
   readonly goal: string;
   readonly browserContext: BrowserRequestContext;
   readonly createdAt: string;
+  /** Upper bound on browser.automation.subgoal calls for this run. */
+  readonly maxSubgoals: number;
   status: RunStatus;
   plannerAgentId?: string;
   plannerSessionId?: string;
@@ -56,7 +58,12 @@ export interface RunRecord {
 export class RunStore {
   private readonly runs = new Map<string, RunRecord>();
 
-  create(runId: string, goal: string, browserContext: BrowserRequestContext): RunRecord {
+  create(
+    runId: string,
+    goal: string,
+    browserContext: BrowserRequestContext,
+    maxSubgoals: number,
+  ): RunRecord {
     let settle!: (payload: RunFinishPayload) => void;
     const settled = new Promise<RunFinishPayload>((resolve) => {
       settle = resolve;
@@ -66,6 +73,7 @@ export class RunStore {
       goal,
       browserContext,
       createdAt: new Date().toISOString(),
+      maxSubgoals,
       status: 'running',
       subgoals: [],
       jevCalls: 0,

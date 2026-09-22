@@ -202,14 +202,8 @@ export function createAutomationCapabilityProvider(
       optionalString(value['plannerModel'], 'plannerModel') ?? configuration.defaultPlannerModel;
     const reasoningEffort =
       (value['reasoningEffort'] as 'low' | 'medium' | 'high' | undefined) ?? 'low';
-    // NOTE: parsed and defaulted but never wired into buildPlannerPrompt/the
-    // executor - the planner currently has no enforced subgoal cap. Flagged
-    // to the user rather than silently deleted or silently made to do
-    // something (see lint-cleanup task); the `void` below is only to satisfy
-    // no-unused-vars without changing behavior.
     const maxSubgoals =
       optionalPositiveInt(value['maxSubgoals'], 'maxSubgoals') ?? DEFAULT_MAX_SUBGOALS;
-    void maxSubgoals;
     const timeoutMs = optionalPositiveInt(value['timeoutMs'], 'timeoutMs') ?? DEFAULT_TIMEOUT_MS;
     const workspaceName = optionalString(value['workspaceName'], 'workspaceName');
     const repoPath = optionalString(value['repoPath'], 'repoPath');
@@ -221,14 +215,14 @@ export function createAutomationCapabilityProvider(
 
     const runId = createRunId();
     const browserContext = resolveBrowserContext(host, context);
-    const run = runStore.create(runId, goal, browserContext);
+    const run = runStore.create(runId, goal, browserContext, maxSubgoals);
 
     if (startUrl) {
       await navigate(host, browserContext, startUrl);
     }
 
     const launchInput = {
-      task: buildPlannerPrompt({ runId, goal, ...(startUrl ? { startUrl } : {}) }),
+      task: buildPlannerPrompt({ runId, goal, maxSubgoals, ...(startUrl ? { startUrl } : {}) }),
       idempotencyKey: `automation-run:${runId}`,
       ...(plannerModel ? { model: plannerModel } : {}),
       ...(workspaceName ? { workspaceName } : {}),
@@ -341,6 +335,11 @@ export function createAutomationCapabilityProvider(
 
     const run = runStore.requireActive(runId);
     noteCapabilityCall(run);
+    if (run.subgoals.length >= run.maxSubgoals) {
+      throw new Error(
+        `AUTOMATION_SUBGOAL_LIMIT: run "${runId}" already used its ${String(run.maxSubgoals)} subgoals; call browser.automation.finish`,
+      );
+    }
     const startedAt = Date.now();
     const adapter = new DomAdapter(host, run.browserContext);
     const result = await runSubgoal({

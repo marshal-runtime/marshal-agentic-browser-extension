@@ -2,6 +2,7 @@ export interface PlannerPromptInput {
   readonly runId: string;
   readonly goal: string;
   readonly startUrl?: string;
+  readonly maxSubgoals: number;
 }
 
 /**
@@ -12,7 +13,7 @@ export interface PlannerPromptInput {
  * The heavy step loop lives in code (executor.ts).
  */
 export function buildPlannerPrompt(input: PlannerPromptInput): string {
-  const { runId, goal, startUrl } = input;
+  const { runId, goal, startUrl, maxSubgoals } = input;
   return `You are the planner for browser automation run "${runId}".
 
 GOAL:
@@ -22,7 +23,8 @@ You cannot touch the browser or view images. You only call runtimeExecuteTypeScr
 context.runtime.invoke(name, { runId: "${runId}", ... }) for:
 
 - browser.automation.subgoal { goal, values?, check?, maxSteps? } - code-driven UI step loop for one
-  small goal (2-8 UI steps). "values" maps a field LABEL to the exact text to type (only text from the
+  small goal (2-8 UI steps). This run allows at most ${String(maxSubgoals)} subgoal calls in total; further
+  calls throw AUTOMATION_SUBGOAL_LIMIT, so plan within that budget. "values" maps a field LABEL to the exact text to type (only text from the
   goal - never invent values). Returns { status, steps, check?, page }; status is 'achieved' only when
   "check" passed; 'claimed_done' means UNVERIFIED and must be treated as failure. status 'low_confidence'
   means the executor refused to guess: it returns { lowConfidence: { operation, confidence, topCandidates } }
