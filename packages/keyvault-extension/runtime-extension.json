@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "identity": "@marshal/keyvault-runtime-extension",
+  "displayName": "Marshal KeyVault",
+  "version": "0.1.0",
+  "entrypoint": "dist/runtime.cjs",
+  "moduleFormat": "commonjs-bundle-v1",
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "defaults": {}
+  },
+  "agentGuidance": {
+    "purpose": "Fill operator-provisioned credentials into explicitly selected browser inputs without returning the secret to the agent.",
+    "when": "Use only after the operator has provisioned the key and while its time window is active.",
+    "recipe": "Discover keyvault.write_to_input_box, provide the vault key and exact username/password selectors, then submit the form. Never ask for or echo the credential.",
+    "boundaries": "The capability does not reveal, return, or copy credentials. The host rejects requests outside the entry window or URL allowlist."
+  },
+  "dependencies": {
+    "services": []
+  }
+}

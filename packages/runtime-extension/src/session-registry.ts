@@ -31,6 +31,9 @@ export class BrowserSessionRegistry {
       chatId,
       executionId,
       browserSessionId,
+      ...(context.browserInstanceId === undefined
+        ? {}
+        : { browserInstanceId: context.browserInstanceId }),
     });
 
     return {
@@ -38,6 +41,9 @@ export class BrowserSessionRegistry {
         chatId,
         executionId,
         browserSessionId,
+        ...(context.browserInstanceId === undefined
+          ? {}
+          : { browserInstanceId: context.browserInstanceId }),
       },
       created: existing === undefined,
     };
@@ -97,6 +103,7 @@ export function buildBrowserIsolationKey(
     context.identity?.userId ?? '',
     context.scope?.workspaceId ?? '',
     context.scope?.projectId ?? '',
+    context.browserInstanceId ?? '',
     chatId,
     executionId,
   ].join('|');

@@ -93,6 +93,81 @@ describe('Marshal runtime host bridge', () => {
     });
   });
 
+  it('blocks browser readback after a secret write while preserving safe interactions', async () => {
+    const execute = vi.fn().mockResolvedValue({ success: true });
+    const executeSecretType = vi.fn().mockResolvedValue({ success: true });
+    const panelClient = createPanelClient();
+    const bridge = createMarshalRuntimeHostBridge({
+      lifecycle: passthroughLifecycle(),
+      panel: { open: vi.fn(), focus: vi.fn(), openOrFocus: vi.fn() },
+      nativeClient: panelClient.client,
+      browserExecutor: { execute, executeSecretType },
+    });
+    const invocation = {
+      principal: { id: 'agent-1', kind: 'agent' },
+      scope: { sessionId: 'chat-1' },
+      executionId: 'exec-1',
+    };
+
+    await bridge.invokeSecretType(
+      {
+        selector: '#password',
+        text: 'secret-only-in-the-host-path',
+        allowedUrlPatterns: ['https://accounts.google.com/*'],
+      },
+      invocation,
+    );
+    const browserContext = bridge.resolveBrowserSession?.(invocation)?.context;
+    if (!browserContext) throw new Error('Expected a resolved browser context');
+
+    await expect(
+      bridge.invokeBrowserCommand('browser_execute_script', {}, browserContext),
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: 'SECRET_READBACK_BLOCKED' },
+    });
+    await expect(
+      bridge.invokeBrowserCommand('browser_click', { selector: '#submit' }, browserContext),
+    ).resolves.toEqual({ success: true });
+    expect(executeSecretType).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('routes an instance-bound secret request to the configured Safari executor', async () => {
+    const defaultSecretExecutor = vi.fn().mockResolvedValue({ success: true });
+    const safariSecretExecutor = vi.fn().mockResolvedValue({ success: true });
+    const bridge = createMarshalRuntimeHostBridge({
+      lifecycle: passthroughLifecycle(),
+      panel: { open: vi.fn(), focus: vi.fn(), openOrFocus: vi.fn() },
+      nativeClient: createPanelClient().client,
+      browserExecutor: {
+        execute: vi.fn().mockResolvedValue({ success: true }),
+        executeSecretType: defaultSecretExecutor,
+      },
+      secretExecutors: {
+        'safari-work-profile': { executeSecretType: safariSecretExecutor },
+      },
+    });
+    const invocation = {
+      principal: { id: 'agent-1', kind: 'agent' },
+      scope: { sessionId: 'chat-1' },
+      executionId: 'exec-safari',
+      browserInstanceId: 'safari-work-profile',
+    };
+
+    await expect(
+      bridge.invokeSecretType(
+        { selector: '#password', text: 'secret', allowedUrlPatterns: ['https://example.test/*'] },
+        invocation,
+      ),
+    ).resolves.toEqual({ success: true });
+    expect(safariSecretExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({ browserInstanceId: 'safari-work-profile' }),
+      expect.objectContaining({ browserInstanceId: 'safari-work-profile' }),
+    );
+    expect(defaultSecretExecutor).not.toHaveBeenCalled();
+  });
+
   it('automatically opens or focuses the panel for a browser execution', async () => {
     const openOrFocus = vi.fn();
     const bridge = createMarshalRuntimeHostBridge({

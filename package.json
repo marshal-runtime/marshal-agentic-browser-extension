@@ -9,7 +9,9 @@
     "packages/extension",
     "packages/mcp-server",
     "packages/cli",
-    "packages/runtime-extension"
+    "packages/runtime-extension",
+    "packages/keyvault-extension",
+    "packages/safari-extension"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -18,6 +20,9 @@
     "build:extension": "npm run build -w packages/extension",
     "build:server": "npm run build -w packages/mcp-server",
     "build:runtime-extension": "npm run build -w packages/runtime-extension",
+    "build:keyvault": "npm run build -w packages/keyvault-extension",
+    "build:safari-extension": "npm run build -w packages/safari-extension",
+    "package:safari": "node scripts/package-safari.mjs",
     "dev": "npm run dev -w packages/extension",
     "test": "vitest run",
     "test:watch": "vitest",

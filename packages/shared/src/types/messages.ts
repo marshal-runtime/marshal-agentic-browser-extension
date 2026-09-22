@@ -4,6 +4,8 @@
  * Each string corresponds to a method on {@link IBrowserAdapter}.
  */
 export type CommandName =
+  /** Host-only command used by Marshal KeyVault; never exposed as an MCP tool. */
+  | 'typeSecret'
   | 'navigate'
   | 'waitForLoad'
   | 'goBack'
@@ -95,6 +97,8 @@ export interface BrowserRequestContext {
   readonly chatId: string;
   readonly executionId: string;
   readonly browserSessionId: string;
+  /** Host-assigned browser instance binding, used by real Safari integration. */
+  readonly browserInstanceId?: string;
 }
 
 /**

@@ -10,6 +10,20 @@ Agentic Browser provides browser automation through:
 Operations cover navigation, DOM interaction, extraction, screenshots, tabs,
 storage, browser APIs, emulation, and remote CDP.
 
+The workspace also contains `@marshal/keyvault-runtime-extension`. It adds the
+agent-visible `keyvault.write_to_input_box` capability while keeping credential
+values out of capability output and normal browser-tool discovery. Build it with
+`npm run build:keyvault`; production hosts must bind its store service to an
+OS-keychain-backed implementation and its secret-input service to the
+privileged browser host bridge.
+
+Real Safari integration sources are available as a separate Safari Web
+Extension/native-app target. Build its JavaScript bundle with
+`npm run build:safari-extension`, then
+package it with the full Xcode `safari-web-extension-converter` workflow. This
+targets Safari.app itself; the existing `webkit` CLI backend remains an isolated
+Playwright WebKit backend.
+
 ## Requirements
 
 - Node.js 22.13 or newer for the Marshal Runtime extension
@@ -99,12 +113,12 @@ node .\packages\mcp-server\dist\index.js
 
 Effective MCP variables include:
 
-| Variable | Purpose |
-| --- | --- |
-| `AGENTIC_BROWSER_SERVER_NAME` | MCP server name |
-| `AGENTIC_BROWSER_SERVER_VERSION` | Reported server version |
-| `AGENTIC_BROWSER_NM_HOST_PATH` | Native host executable path |
-| `AGENTIC_BROWSER_TIMEOUT` | Operation timeout |
+| Variable                         | Purpose                     |
+| -------------------------------- | --------------------------- |
+| `AGENTIC_BROWSER_SERVER_NAME`    | MCP server name             |
+| `AGENTIC_BROWSER_SERVER_VERSION` | Reported server version     |
+| `AGENTIC_BROWSER_NM_HOST_PATH`   | Native host executable path |
+| `AGENTIC_BROWSER_TIMEOUT`        | Operation timeout           |
 
 The checked-in Native Messaging registration helper is Windows-only and is not
 a complete bidirectional MCP-to-extension relay. It also invokes undeclared

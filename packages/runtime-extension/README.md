@@ -18,6 +18,25 @@ The build emits:
 - `dist/runtime.cjs` — portable `commonjs-bundle-v1` Marshal runtime entrypoint
 - `dist/host.cjs` — Node host bridge for Native Messaging, durable lifecycle events, and panel host tools
 
+For a real Safari profile, pass an instance-bound secret executor in the host
+options. The host refuses to send a Safari-bound request through the Chromium
+Native Messaging client when no matching executor exists:
+
+```ts
+host: {
+  // ...normal lifecycle/panel options...
+  secretExecutors: {
+    [safariBrowserInstanceId]: safariSecretExecutor,
+  },
+}
+```
+
+`safariSecretExecutor` is the small adapter around
+`native/safari/MarshalSafariBridge.swift`. It receives the already-validated
+secret request, dispatches it to Safari, and returns only the completion
+receipt. The `browserInstanceId` must come from the Safari extension handshake,
+not from model input.
+
 ## Manager lifecycle integration
 
 The host adapter constructs the real `LocalRuntimeExtensionPackageLoader` and

@@ -23,8 +23,28 @@ import type {
   MarshalBrowserRuntimeHostModule,
   MaybePromise,
   ResolvedBrowserSession,
+  SecretBrowserExecutor,
 } from './contracts.js';
 import { buildBrowserIsolationKey, resolveChatId } from './session-registry.js';
+
+/**
+ * Once a secret has been typed, block operations that can read it back from
+ * the page. Clicks, navigation, waits, and ordinary typing remain available
+ * so an agent can finish the sign-in flow.
+ */
+const SECRET_READBACK_BLOCKED_TOOLS = new Set([
+  'browser_screenshot',
+  'browser_accessibility_tree',
+  'browser_get_html',
+  'browser_extract_data',
+  'browser_execute_script',
+  'browser_execute_script_file',
+  'browser_validate',
+  'browser_console',
+  'browser_wait_for_condition',
+  'browser_intercept_network',
+  'browser_get_storage',
+]);
 
 export interface DurableLifecycleCoordinator {
   apply<TRequest, TResult>(
@@ -52,7 +72,9 @@ export interface MarshalRuntimeHostBridgeOptions {
   readonly nativeMessagingHostPath?: string;
   readonly timeout?: number;
   readonly nativeClient?: NativeMessagingClient;
-  readonly browserExecutor?: Pick<ToolExecutor, 'execute'>;
+  readonly browserExecutor?: Pick<ToolExecutor, 'execute' | 'executeSecretType'>;
+  /** Optional per-browser-instance secret transports, e.g. real Safari. */
+  readonly secretExecutors?: Readonly<Record<string, SecretBrowserExecutor>>;
 }
 
 export interface MarshalRuntimeHostBridge extends MarshalBrowserRuntimeHostModule {
@@ -71,6 +93,7 @@ export function createMarshalRuntimeHostBridge(
   const executor = options.browserExecutor ?? new ToolExecutor(client, options.timeout);
   const focus = new PanelFocusCoordinator();
   const panelSessions = new Set<string>();
+  const secretTaintedSessions = new Set<string>();
   const panelTimeout = options.timeout ?? 30_000;
   const browserSessions = new BrowserInvocationContextResolver(() => randomUUID());
 
@@ -79,10 +102,53 @@ export function createMarshalRuntimeHostBridge(
     now: () => new Date().toISOString(),
     resolveBrowserSession: (context) => browserSessions.resolve(context),
     invokeBrowserCommand: async (name, input, context) => {
+      if (
+        secretTaintedSessions.has(context.browserSessionId) &&
+        SECRET_READBACK_BLOCKED_TOOLS.has(name)
+      ) {
+        return {
+          success: false,
+          error: {
+            code: 'SECRET_READBACK_BLOCKED',
+            message:
+              'This browser session has received a KeyVault secret; DOM/script readback is blocked.',
+          },
+        };
+      }
       if (!client.isConnected()) {
         client.connect();
       }
       return executor.execute(name, input, context);
+    },
+    invokeSecretType: async (input, context) => {
+      const browserContext = browserSessions.resolve(context).context;
+      const secretExecutor = resolveSecretExecutor(
+        options.secretExecutors,
+        browserContext,
+        executor,
+      );
+      if (!secretExecutor) {
+        return {
+          success: false,
+          error: {
+            code: 'BROWSER_INSTANCE_UNBOUND',
+            message: 'No secret transport is bound to the requested browser instance.',
+          },
+        };
+      }
+      if (secretExecutor === executor && !client.isConnected()) {
+        client.connect();
+      }
+      const result = await secretExecutor.executeSecretType(
+        browserContext.browserInstanceId === undefined
+          ? input
+          : { ...input, browserInstanceId: browserContext.browserInstanceId },
+        browserContext,
+      );
+      if (result.success) {
+        secretTaintedSessions.add(browserContext.browserSessionId);
+      }
+      return result;
     },
     publishLifecycleEvent: async (event) => {
       await persistLifecycleEvent(options.lifecycle, event);
@@ -143,6 +209,7 @@ export function createMarshalRuntimeHostBridge(
           }
         }
       } finally {
+        secretTaintedSessions.clear();
         client.disconnect();
       }
       if (cleanupErrors.length > 0) {
@@ -150,6 +217,15 @@ export function createMarshalRuntimeHostBridge(
       }
     },
   };
+}
+
+function resolveSecretExecutor(
+  secretExecutors: Readonly<Record<string, SecretBrowserExecutor>> | undefined,
+  context: BrowserRequestContext,
+  defaultExecutor: SecretBrowserExecutor,
+): SecretBrowserExecutor | undefined {
+  if (context.browserInstanceId === undefined) return defaultExecutor;
+  return secretExecutors?.[context.browserInstanceId];
 }
 
 class BrowserInvocationContextResolver {
@@ -167,7 +243,14 @@ class BrowserInvocationContextResolver {
       this.sessions.set(key, browserSessionId);
     }
     return {
-      context: { chatId, executionId, browserSessionId },
+      context: {
+        chatId,
+        executionId,
+        browserSessionId,
+        ...(context.browserInstanceId === undefined
+          ? {}
+          : { browserInstanceId: context.browserInstanceId }),
+      },
       created: existing === undefined,
     };
   }

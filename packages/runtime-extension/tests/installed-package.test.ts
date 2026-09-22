@@ -77,6 +77,7 @@ describe('installed Marshal runtime extension package', () => {
         '  createId: (kind) => `${kind}-${++id}`,',
         "  now: () => '2026-08-16T00:00:00.000Z',",
         '  invokeBrowserCommand: async () => ({ success: true }),',
+        '  invokeSecretType: async () => ({ success: true }),',
         '  publishLifecycleEvent: async () => {},',
         '  openOrFocusPanel: async () => {},',
         '};',

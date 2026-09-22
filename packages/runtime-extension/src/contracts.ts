@@ -5,6 +5,8 @@ export interface BrowserRequestContext {
   readonly chatId: string;
   readonly executionId: string;
   readonly browserSessionId: string;
+  /** Host-assigned browser instance binding, used by real Safari integration. */
+  readonly browserInstanceId?: string;
 }
 
 export interface ResolvedBrowserSession {
@@ -70,6 +72,8 @@ export interface InvocationContext {
   readonly identity?: RuntimeHarnessIdentity;
   readonly scope?: RuntimeScope;
   readonly executionId?: string;
+  /** Host-assigned browser instance; never supplied by the model. */
+  readonly browserInstanceId?: string;
   readonly signal?: RuntimeAbortSignal;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
@@ -132,6 +136,7 @@ export interface RuntimeCatalogProvider {
 }
 
 export interface RuntimeExtensionActivation {
+  readonly uiApplications?: readonly Readonly<Record<string, unknown>>[];
   readonly capabilityProviders?: readonly CapabilityProvider[];
   readonly catalogProviders?: readonly RuntimeCatalogProvider[];
   readonly dispose?: () => MaybePromise<void>;
@@ -162,6 +167,13 @@ export interface BrowserCommandResult {
   readonly metadata?: BrowserCommandMetadata;
 }
 
+export interface SecretBrowserExecutor {
+  executeSecretType(
+    input: Record<string, unknown>,
+    context: BrowserRequestContext,
+  ): Promise<BrowserCommandResult>;
+}
+
 export interface MarshalBrowserRuntimeHostModule {
   createId(kind: 'browser-session' | 'execution' | 'event'): string;
   now(): string;
@@ -170,6 +182,14 @@ export interface MarshalBrowserRuntimeHostModule {
     name: string,
     input: Record<string, unknown>,
     context: BrowserRequestContext,
+  ): Promise<BrowserCommandResult>;
+  /**
+   * Host-only secret input path. Implementations must not publish the input
+   * through lifecycle events, panel logs, or any agent-visible result.
+   */
+  invokeSecretType(
+    input: Record<string, unknown>,
+    context: InvocationContext,
   ): Promise<BrowserCommandResult>;
   publishLifecycleEvent(event: BrowserLifecycleEvent): Promise<void>;
   openOrFocusPanel(context: BrowserRequestContext): Promise<void>;

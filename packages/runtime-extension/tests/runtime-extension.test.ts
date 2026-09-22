@@ -284,6 +284,7 @@ function createHost(
       invocations.push({ name, input, context });
       return Promise.resolve(result);
     },
+    invokeSecretType: () => Promise.resolve(result),
     publishLifecycleEvent: (event) => {
       events.push(event);
       return Promise.resolve();

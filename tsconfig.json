@@ -23,7 +23,8 @@
     { "path": "packages/extension" },
     { "path": "packages/mcp-server" },
     { "path": "packages/cli" },
-    { "path": "packages/runtime-extension" }
+    { "path": "packages/runtime-extension" },
+    { "path": "packages/safari-extension" }
   ],
   "exclude": ["node_modules", "dist", "build"]
 }

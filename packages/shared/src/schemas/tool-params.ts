@@ -91,6 +91,7 @@ export const BrowserRequestContextSchema = z.object({
   chatId: z.string().min(1),
   executionId: z.string().min(1),
   browserSessionId: z.string().min(1),
+  browserInstanceId: z.string().min(1).optional(),
 });
 
 /** Zod schema for the command request envelope. */
@@ -143,6 +144,27 @@ export const TypeParamsSchema = z.object({
 
 /** Inferred type from TypeParamsSchema. */
 export type TypeParams = z.infer<typeof TypeParamsSchema>;
+
+/**
+ * Parameters for the host-only secret typing command.
+ *
+ * This command is intentionally not included in BROWSER_TOOLS, so normal
+ * browser discovery and MCP callers cannot request it. The allowlist travels
+ * with the privileged request and is re-checked inside the browser extension
+ * immediately before the value is written to the page.
+ */
+export const TypeSecretParamsSchema = z.object({
+  selector: z.string().min(1),
+  text: z.string(),
+  allowedUrlPatterns: z.array(z.string().min(1)).min(1).max(128),
+  /** Host-assigned routing value; agents must not choose this value. */
+  browserInstanceId: z.string().min(1).optional(),
+  clearFirst: z.boolean().optional(),
+  timeout: z.number().int().positive().optional(),
+});
+
+/** Inferred type from TypeSecretParamsSchema. */
+export type TypeSecretParams = z.infer<typeof TypeSecretParamsSchema>;
 
 /** Zod schema for screenshot parameters. */
 export const ScreenshotParamsSchema = z.object({

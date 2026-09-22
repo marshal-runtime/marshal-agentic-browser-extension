@@ -1,0 +1,28 @@
+{
+  "name": "@marshal/keyvault-runtime-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/runtime.cjs",
+  "types": "dist/types/runtime.d.ts",
+  "files": [
+    "dist",
+    "runtime-extension.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rimraf dist && tsc --build --force tsconfig.json && node build.mjs",
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "rimraf": "6.0.1",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

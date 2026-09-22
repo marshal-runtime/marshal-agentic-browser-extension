@@ -5,6 +5,7 @@ export {
   NavigateParamsSchema,
   ClickParamsSchema,
   TypeParamsSchema,
+  TypeSecretParamsSchema,
   ScreenshotParamsSchema,
   HoverParamsSchema,
   ScrollParamsSchema,

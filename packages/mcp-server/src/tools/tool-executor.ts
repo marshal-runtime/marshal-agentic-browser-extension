@@ -140,6 +140,27 @@ export class ToolExecutor {
     return this.sendAndAwaitResponse(request);
   }
 
+  /**
+   * Sends the host-only KeyVault command. This is deliberately separate from
+   * execute(): it has no MCP tool name, no browser-tool descriptor, and its
+   * response is reduced to a success/error envelope by the browser extension.
+   */
+  async executeSecretType(
+    params: Record<string, unknown>,
+    context?: BrowserRequestContext,
+  ): Promise<ToolExecutorResult> {
+    const requestId = randomUUID();
+    const request: CommandRequest = {
+      id: requestId,
+      command: 'typeSecret',
+      params,
+      timestamp: Date.now(),
+      context,
+    };
+
+    return this.sendAndAwaitResponse(request);
+  }
+
   private sendAndAwaitResponse(request: CommandRequest): Promise<ToolExecutorResult> {
     return new Promise<ToolExecutorResult>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
