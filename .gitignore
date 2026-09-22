@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 build/
+.build/
 .agent-memory/**
 .roo/**
 .temp/**

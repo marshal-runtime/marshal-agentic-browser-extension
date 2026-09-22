@@ -1,0 +1,33 @@
+{
+  "name": "@agentic-browser/automation-extension",
+  "version": "0.1.0",
+  "description": "Jev-powered hierarchical browser automation: a cheap planner agent drives a code-loop executor (ported from Browser Use's jev-ultrafast) over the agentic browser.",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/runtime.cjs",
+  "types": "dist/types/runtime.d.ts",
+  "files": [
+    "dist",
+    "runtime-extension.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rimraf dist && tsc --build --force tsconfig.json && node build.mjs",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "esbuild": "0.25.12",
+    "rimraf": "6.0.1",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}

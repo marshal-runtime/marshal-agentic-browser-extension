@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "identity": "@agentic-browser/automation-extension",
+  "displayName": "Jev Browser Automation",
+  "version": "0.1.0",
+  "entrypoint": "dist/runtime.cjs",
+  "moduleFormat": "commonjs-bundle-v1",
+  "dependencies": {
+    "extensions": [{ "id": "@marshal/jev", "version": "1.0.0" }],
+    "services": [{ "id": "@marshal/jev:client", "version": "1.0.0", "provider": "@marshal/jev" }]
+  },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "defaultPlannerModel": { "type": "string" },
+        "defaultJevModel": { "type": "string" },
+        "maxStepsPerSubgoal": { "type": "number" },
+        "minConfidence": { "type": "number" },
+        "axHelperPath": {
+          "type": "string",
+          "description": "Absolute path to the marshal-ax-helper binary; defaults to the bundled dist/native copy."
+        },
+        "ocrHelperPath": {
+          "type": "string",
+          "description": "Absolute path to the marshal-ocr-helper binary; defaults to the bundled dist/native copy. computer.automation.run only uses OCR fallback when this binary is present."
+        },
+        "ocrMode": {
+          "enum": ["auto", "always", "never"],
+          "description": "Default OCR fallback mode for computer.automation.run when the request omits ocrMode; default 'auto'."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "agentGuidance": {
+    "purpose": "Runs a multi-step browser goal, or a native macOS app goal, end to end: a cheap planner agent decomposes it into subgoals; a code executor drives Jev's fast element-choice model through each subgoal; code checks verify results.",
+    "when": "Use browser.automation.run for a browser task with several UI steps (search, filter, fill a form, navigate to a result). Use computer.automation.run for the same kind of task against any native macOS app (including Electron apps like Slack/Notion/VS Code), driven through the Accessibility API.",
+    "recipe": "Call browser.automation.run with { goal, startUrl? }, or computer.automation.run with { goal, app } (bundle id or app name). Both block until the launched planner finishes and return { status, result, evidence }. If status is 'blocked' with reason 'jev-not-connected', call jev.connect first and retry; computer.automation.run also returns reason 'accessibility-not-granted' with a hint to open System Settings when Accessibility access is missing.",
+    "boundaries": "Acts only in the browser session or native app bound at run time. Stops and returns status 'blocked' before purchases, payments, sends, or submitting personal data unless the goal explicitly authorizes it. Never invents field values not present in the goal or planner-supplied values."
+  },
+  "contributes": {
+    "capabilities": [
+      "browser.automation.run",
+      "browser.automation.subgoal",
+      "browser.automation.check",
+      "browser.automation.observe",
+      "browser.automation.finish",
+      "browser.automation.get",
+      "computer.automation.apps",
+      "computer.automation.run",
+      "computer.automation.subgoal",
+      "computer.automation.check",
+      "computer.automation.observe",
+      "computer.automation.finish",
+      "computer.automation.get"
+    ]
+  }
+}
