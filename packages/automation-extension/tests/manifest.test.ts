@@ -30,7 +30,7 @@ describe('runtime-extension.json manifest', () => {
     ]);
   });
 
-  it('contributes exactly the six browser.automation.* and seven computer.automation.* capabilities', () => {
+  it('contributes exactly the seven browser.automation.* and eight computer.automation.* capabilities', () => {
     const contributes = manifest.contributes as { capabilities: string[] };
     expect(contributes.capabilities.sort()).toEqual(
       [
@@ -40,6 +40,7 @@ describe('runtime-extension.json manifest', () => {
         'browser.automation.observe',
         'browser.automation.finish',
         'browser.automation.get',
+        'browser.automation.list',
         'computer.automation.apps',
         'computer.automation.run',
         'computer.automation.subgoal',
@@ -47,6 +48,7 @@ describe('runtime-extension.json manifest', () => {
         'computer.automation.observe',
         'computer.automation.finish',
         'computer.automation.get',
+        'computer.automation.list',
       ].sort(),
     );
   });
@@ -105,7 +107,7 @@ describe('capability descriptor names', () => {
 describe('capability descriptor schemas (host install contract)', () => {
   it('declares an object outputSchema with explicit properties and additionalProperties false for every capability', async () => {
     const { AUTOMATION_CAPABILITY_DESCRIPTORS } = await import('../src/capabilities.js');
-    expect(AUTOMATION_CAPABILITY_DESCRIPTORS).toHaveLength(6);
+    expect(AUTOMATION_CAPABILITY_DESCRIPTORS).toHaveLength(7);
     for (const descriptor of AUTOMATION_CAPABILITY_DESCRIPTORS) {
       const schema = descriptor.outputSchema as Record<string, unknown>;
       expect(schema['type'], descriptor.name).toBe('object');

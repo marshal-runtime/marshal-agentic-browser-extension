@@ -5,6 +5,9 @@ const PROTOCOL_VERSION = '1.0.0';
 export const OBSERVE_DEFAULT_CHARS = 1000;
 export const OBSERVE_MAX_CHARS = 8000;
 export const OBSERVE_MAX_FIND_TERMS = 16;
+export const LIST_DEFAULT_LIMIT = 20;
+export const LIST_MAX_LIMIT = 100;
+export const LIST_GOAL_EXCERPT_CHARS = 200;
 
 const RUN_INPUT_SCHEMA = {
   type: 'object',
@@ -25,6 +28,11 @@ const RUN_INPUT_SCHEMA = {
     ocrMode: {
       enum: ['auto', 'always', 'never'],
       description: 'OCR fallback over the AX tree; default "auto".',
+    },
+    wait: {
+      type: 'boolean',
+      description:
+        'Default true: blocks until the run finishes. Set false to return {runId, status: "running", plannerSessionId} as soon as the planner launches, without waiting - poll computer.automation.get {runId} for the final result, or computer.automation.list if the runId is ever lost (e.g. the host backgrounded this call).',
     },
   },
 } as const;
@@ -202,7 +210,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
   descriptor(
     'get',
     'Read an automation run record',
-    'Returns the run status, stats, and subgoal history.',
+    'Returns the run status, stats, and subgoal history; once finished, also the final result/evidence/error.',
     {
       type: 'object',
       additionalProperties: false,
@@ -220,6 +228,40 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
         subgoals: { type: 'array', items: { type: 'object' } },
         result: {},
         evidence: STRING_ARRAY_SCHEMA,
+        error: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    'low',
+  ),
+  descriptor(
+    'list',
+    'List recent automation runs',
+    'Returns recent runs (newest first) with runId, a goal excerpt, status, createdAt, and plannerSessionId. Use this to recover a run whose runId was lost or never seen (e.g. computer.automation.run was backgrounded by the host) - then call computer.automation.get with the found runId.',
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: LIST_MAX_LIMIT },
+      },
+    },
+    {
+      type: 'object',
+      properties: {
+        runs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              runId: { type: 'string' },
+              goal: { type: 'string' },
+              status: { type: 'string' },
+              createdAt: { type: 'string' },
+              plannerSessionId: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
       },
       additionalProperties: false,
     },

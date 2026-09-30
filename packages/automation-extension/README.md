@@ -51,24 +51,39 @@ one is in play:
 ## Capabilities
 
 **Browser** (`src/capabilities.ts`): `browser.automation.run`, `.subgoal`,
-`.check`, `.observe`, `.finish`, `.get`. `run` takes `{ goal, startUrl? }`.
+`.check`, `.observe`, `.finish`, `.get`, `.list`. `run` takes `{ goal,
+startUrl?, wait? }`.
 
-**Native app** (`src/native/native-capabilities.ts`): the same six ops
+**Native app** (`src/native/native-capabilities.ts`): the same seven ops
 under `computer.automation.*`, plus `computer.automation.apps` (lists
 running GUI apps with Accessibility/Screen Recording permission status).
-`computer.automation.run` takes `{ goal, app, ocrMode? }` - `app` is a
-bundle id (e.g. `com.apple.TextEdit`) or name (matched exactly by bundle
+`computer.automation.run` takes `{ goal, app, ocrMode?, wait? }` - `app` is
+a bundle id (e.g. `com.apple.TextEdit`) or name (matched exactly by bundle
 id, then exact name, then substring); `ocrMode` (`'auto' | 'always' |
 'never'`, defaults to the `ocrMode` config value, then `'auto'`) selects
 whether `HybridAdapter` wraps the `AxAdapter` for that run - OCR is also
 skipped whenever no `marshal-ocr-helper` binary is installed.
 
-Both `run` capabilities focus/launch the target, run the planner through
-the same subgoal/check/observe/finish loop, and block until it finishes,
-returning `{ runId, status, result, evidence, plannerSessionId, stats }`.
-On failure to start, `run` returns `status: 'blocked'` with `reason:
-'jev-not-connected'` (call `jev.connect`) or, for `computer.automation.run`
-only, `reason: 'accessibility-not-granted'` (see TCC below).
+Both `run` capabilities focus/launch the target, then run the planner
+through the same subgoal/check/observe/finish loop. By default (`wait`
+omitted or `true`) they block until it finishes, returning `{ runId,
+status, result, evidence, plannerSessionId, stats }`. On failure to start,
+`run` returns `status: 'blocked'` with `reason: 'jev-not-connected'` (call
+`jev.connect`) or, for `computer.automation.run` only, `reason:
+'accessibility-not-granted'` (see TCC below).
+
+Pass `wait: false` to get the runId back as soon as the planner launches,
+without waiting for it to finish: `{ runId, status: 'running',
+plannerSessionId }`. This is the way to avoid losing the runId when a run
+may take a while and the caller's own tool call could get backgrounded
+before it returns - poll `*.get { runId }` afterwards for the final
+`result`/`evidence`/`error` (the run keeps going and records its outcome
+via the same internal store regardless of whether anyone is still waiting
+on it). If the runId was never captured or was lost anyway, `*.list`
+(optional `{ limit? }`, default 20, max 100) returns recent runs newest
+first - `{ runId, goal (excerpt), status, createdAt, plannerSessionId }` -
+so the run can be found and then `*.get` for the full result. `*.get` also
+reports `error` for a run that failed to launch or timed out.
 
 ## Configuration
 

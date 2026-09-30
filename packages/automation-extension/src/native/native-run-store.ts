@@ -19,9 +19,11 @@ export interface NativeSubgoalHistoryEntry {
 }
 
 export interface NativeRunFinishPayload {
-  readonly status: 'succeeded' | 'failed' | 'blocked';
+  readonly status: 'succeeded' | 'failed' | 'blocked' | 'timeout';
   readonly result?: unknown;
   readonly evidence?: readonly string[];
+  /** Set when the run never got a real result (launch failure, timeout); see computer.automation.get. */
+  readonly error?: string;
 }
 
 export interface NativeRunRecord {
@@ -80,6 +82,11 @@ export class NativeRunStore {
 
   get(runId: string): NativeRunRecord | undefined {
     return this.runs.get(runId);
+  }
+
+  /** All runs known to this store (any status), in creation order. See computer.automation.list. */
+  list(): readonly NativeRunRecord[] {
+    return [...this.runs.values()];
   }
 
   requireActive(runId: string): NativeRunRecord {

@@ -31,6 +31,9 @@ import type { NativeRunFinishPayload, NativeRunRecord } from './native-run-store
 import { NativeRunStore } from './native-run-store.js';
 import {
   DESCRIPTORS,
+  LIST_DEFAULT_LIMIT,
+  LIST_GOAL_EXCERPT_CHARS,
+  LIST_MAX_LIMIT,
   OBSERVE_DEFAULT_CHARS,
   OBSERVE_MAX_CHARS,
   OBSERVE_MAX_FIND_TERMS,
@@ -40,6 +43,7 @@ import {
   asCheck,
   asRecord,
   findSnippets,
+  optionalBoolean,
   optionalCheck,
   optionalPositiveInt,
   optionalStringArray,
@@ -227,6 +231,73 @@ export function createNativeCapabilityProvider(
     });
   }
 
+  /**
+   * Races the run to completion: the planner's own `computer.automation.finish`
+   * call (via `run.settled`), the planner-liveness watchdog, or the run-level
+   * `timeoutMs`. Always runs to completion and persists the outcome via
+   * `runStore.finish`, whether or not `handleRun` is still waiting on it (see
+   * the `wait: false` branch below) - so `computer.automation.get` can
+   * recover the final result even for a run its caller never blocked on.
+   */
+  async function settleRun(
+    run: NativeRunRecord,
+    adapter: PerceptionAdapter,
+    agent: MarshalRuntimeAgent,
+    context: InvocationContext,
+    timeoutMs: number,
+    startedAt: number,
+  ): Promise<{ readonly output: unknown }> {
+    const runId = run.runId;
+    const watcher = watchNativePlannerLiveness({
+      run,
+      agentId: agent.id,
+      execute,
+      context,
+      finishAsFailed: (evidence) =>
+        runStore.finish(runId, { status: 'failed', evidence: [evidence] }),
+      ...(options.createPoller ? { createPoller: options.createPoller } : {}),
+      ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
+    });
+
+    const timeoutPromise = new Promise<NativeRunFinishPayload>((resolve) => {
+      const timer = scheduleTimeout(() => {
+        resolve({ status: 'timeout', evidence: [`Timed out after ${String(timeoutMs)}ms`] });
+      }, timeoutMs);
+      void run.settled.then(() => {
+        timer.cancel();
+      });
+    });
+
+    const outcome = await Promise.race([run.settled, timeoutPromise]);
+    watcher.stop();
+    const timedOut = run.status === 'running';
+    if (timedOut) {
+      runStore.finish(runId, { status: 'timeout', evidence: outcome.evidence ?? [] });
+      await execute(
+        {
+          protocolVersion: RUNTIME_PROTOCOL_VERSION,
+          targetType: 'operation',
+          target: 'marshal.agent.cancel',
+          input: { agentId: agent.id },
+        },
+        context,
+      ).catch(() => undefined);
+    }
+
+    await adapter.dispose?.().catch(() => undefined);
+
+    const durationMs = Date.now() - startedAt;
+    const finalStatus = timedOut ? 'timeout' : outcome.status;
+    return record({
+      runId,
+      status: finalStatus,
+      result: outcome.result,
+      evidence: outcome.evidence ?? [],
+      plannerSessionId: run.plannerSessionId,
+      stats: runStats(run, durationMs),
+    });
+  }
+
   async function handleRun(
     input: unknown,
     context: InvocationContext,
@@ -242,6 +313,7 @@ export function createNativeCapabilityProvider(
     const workspaceName = value['workspaceName'] as string | undefined;
     const repoPath = value['repoPath'] as string | undefined;
     const ocrMode = (value['ocrMode'] as OcrMode | undefined) ?? configuration.ocrMode ?? 'auto';
+    const wait = optionalBoolean(value['wait'], 'wait') ?? true;
 
     const status = await jevClient.status();
     if (status.state !== 'connected') {
@@ -321,16 +393,17 @@ export function createNativeCapabilityProvider(
     if (launchResponse.status !== 'success' || !launchResponse.result) {
       const hostLacksAllowlist = rejectsAllowedTools(launchResponse);
       if (hostLacksAllowlist) run.allowlistApplied = false;
-      runStore.finish(runId, { status: 'failed' });
+      const errorMessage = hostLacksAllowlist
+        ? 'This Marshal host does not support allowedTools on marshal.agent.launch; update Marshal to run the planner.'
+        : (launchResponse.error?.message ?? 'marshal.agent.launch did not succeed');
+      runStore.finish(runId, { status: 'failed', error: errorMessage });
       await adapter.dispose?.().catch(() => undefined);
       return record({
         runId,
         status: 'failed',
         evidence: [],
         stats: runStats(run, Date.now() - startedAt),
-        error: hostLacksAllowlist
-          ? 'This Marshal host does not support allowedTools on marshal.agent.launch; update Marshal to run the planner.'
-          : (launchResponse.error?.message ?? 'marshal.agent.launch did not succeed'),
+        error: errorMessage,
       });
     }
     const agent: MarshalRuntimeAgent = (
@@ -339,54 +412,16 @@ export function createNativeCapabilityProvider(
     run.plannerAgentId = agent.id;
     run.plannerSessionId = agent.sessionId ?? agent.id;
 
-    const watcher = watchNativePlannerLiveness({
-      run,
-      agentId: agent.id,
-      execute,
-      context,
-      finishAsFailed: (evidence) =>
-        runStore.finish(runId, { status: 'failed', evidence: [evidence] }),
-      ...(options.createPoller ? { createPoller: options.createPoller } : {}),
-      ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
-    });
-
-    const timeoutPromise = new Promise<NativeRunFinishPayload>((resolve) => {
-      const timer = scheduleTimeout(() => {
-        resolve({ status: 'failed', evidence: [`Timed out after ${String(timeoutMs)}ms`] });
-      }, timeoutMs);
-      void run.settled.then(() => {
-        timer.cancel();
-      });
-    });
-
-    const outcome = await Promise.race([run.settled, timeoutPromise]);
-    watcher.stop();
-    const timedOut = run.status === 'running';
-    if (timedOut) {
-      run.status = 'timeout';
-      await execute(
-        {
-          protocolVersion: RUNTIME_PROTOCOL_VERSION,
-          targetType: 'operation',
-          target: 'marshal.agent.cancel',
-          input: { agentId: agent.id },
-        },
-        context,
-      ).catch(() => undefined);
+    const settlement = settleRun(run, adapter, agent, context, timeoutMs, startedAt);
+    if (!wait) {
+      // Detached mode: the caller gets the runId right away, before the run
+      // is anywhere near done, so it is never lost to a host-side background
+      // move. settleRun keeps running and still persists its outcome via
+      // runStore.finish and disposes the adapter; nothing here awaits it.
+      settlement.catch(() => undefined);
+      return record({ runId, status: 'running', plannerSessionId: run.plannerSessionId });
     }
-
-    await adapter.dispose?.().catch(() => undefined);
-
-    const durationMs = Date.now() - startedAt;
-    const finalStatus = timedOut ? 'timeout' : outcome.status;
-    return record({
-      runId,
-      status: finalStatus,
-      result: outcome.result,
-      evidence: outcome.evidence ?? [],
-      plannerSessionId: run.plannerSessionId,
-      stats: runStats(run, durationMs),
-    });
+    return settlement;
   }
 
   async function handleSubgoal(input: unknown): Promise<{ readonly output: unknown }> {
@@ -507,9 +542,44 @@ export function createNativeCapabilityProvider(
       stats: runStats(run, (run.finishedAtMs ?? Date.now()) - Date.parse(run.createdAt)),
       subgoals: run.subgoals,
       ...(run.finishPayload
-        ? { result: run.finishPayload.result, evidence: run.finishPayload.evidence ?? [] }
+        ? {
+            result: run.finishPayload.result,
+            evidence: run.finishPayload.evidence ?? [],
+            ...(run.finishPayload.error ? { error: run.finishPayload.error } : {}),
+          }
         : {}),
     });
+  }
+
+  /** Finds a run again when its runId was lost - see computer.automation.list. */
+  function handleList(input: unknown): { readonly output: unknown } {
+    const value = asRecord(input, 'computer.automation.list');
+    const limit = optionalPositiveInt(value['limit'], 'limit') ?? LIST_DEFAULT_LIMIT;
+    if (limit > LIST_MAX_LIMIT) {
+      throw new Error(
+        `AUTOMATION_INVALID_INPUT: "limit" must be at most ${String(LIST_MAX_LIMIT)}`,
+      );
+    }
+    // NativeRunStore.list() is creation-ordered (oldest first, Map insertion
+    // order); reversing it is newest-first even for runs created in the same
+    // millisecond, where sorting by parsed `createdAt` would tie and fall
+    // back to insertion order anyway.
+    const runs = runStore
+      .list()
+      .slice()
+      .reverse()
+      .slice(0, limit)
+      .map((r) => ({
+        runId: r.runId,
+        goal:
+          r.goal.length > LIST_GOAL_EXCERPT_CHARS
+            ? `${r.goal.slice(0, LIST_GOAL_EXCERPT_CHARS)}…`
+            : r.goal,
+        status: r.status,
+        createdAt: r.createdAt,
+        plannerSessionId: r.plannerSessionId,
+      }));
+    return record({ runs });
   }
 
   return {
@@ -535,6 +605,8 @@ export function createNativeCapabilityProvider(
           return handleFinish(input);
         case 'computer.automation.get':
           return handleGet(input);
+        case 'computer.automation.list':
+          return handleList(input);
         default:
           throw new Error(`AUTOMATION_UNKNOWN_CAPABILITY: ${name}`);
       }

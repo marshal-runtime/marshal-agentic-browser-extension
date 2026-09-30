@@ -36,7 +36,7 @@
   "agentGuidance": {
     "purpose": "Runs a multi-step browser goal, or a native macOS app goal, end to end: a cheap planner agent decomposes it into subgoals; a code executor drives Jev's fast element-choice model through each subgoal; code checks verify results.",
     "when": "Use browser.automation.run for a browser task with several UI steps (search, filter, fill a form, navigate to a result). Use computer.automation.run for the same kind of task against any native macOS app (including Electron apps like Slack/Notion/VS Code), driven through the Accessibility API.",
-    "recipe": "Call browser.automation.run with { goal, startUrl? }, or computer.automation.run with { goal, app } (bundle id or app name). Both block until the launched planner finishes and return { status, result, evidence }. If status is 'blocked' with reason 'jev-not-connected', call jev.connect first and retry; computer.automation.run also returns reason 'accessibility-not-granted' with a hint to open System Settings when Accessibility access is missing.",
+    "recipe": "Call browser.automation.run with { goal, startUrl? }, or computer.automation.run with { goal, app } (bundle id or app name). Both block until the planner finishes, returning { runId, status, result, evidence, plannerSessionId }. status 'blocked'+reason 'jev-not-connected' means call jev.connect first; computer.automation.run also returns reason 'accessibility-not-granted' with a System Settings hint. Pass { wait: false } for long runs to get { runId, status: 'running', plannerSessionId } immediately, then poll *.get { runId } for the final result. Lost a runId? Call *.list to find it by goal/status/createdAt, then *.get it.",
     "boundaries": "Acts only in the browser session or native app bound at run time. Stops and returns status 'blocked' before purchases, payments, sends, or submitting personal data unless the goal explicitly authorizes it. Never invents field values not present in the goal or planner-supplied values."
   },
   "contributes": {
@@ -47,13 +47,15 @@
       "browser.automation.observe",
       "browser.automation.finish",
       "browser.automation.get",
+      "browser.automation.list",
       "computer.automation.apps",
       "computer.automation.run",
       "computer.automation.subgoal",
       "computer.automation.check",
       "computer.automation.observe",
       "computer.automation.finish",
-      "computer.automation.get"
+      "computer.automation.get",
+      "computer.automation.list"
     ]
   }
 }

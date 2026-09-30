@@ -3,6 +3,9 @@ import { navigate, saveScreenshot } from './browser-actions.js';
 import { resolveBrowserContext } from './browser-session.js';
 import {
   DESCRIPTORS,
+  LIST_DEFAULT_LIMIT,
+  LIST_GOAL_EXCERPT_CHARS,
+  LIST_MAX_LIMIT,
   OBSERVE_DEFAULT_CHARS,
   OBSERVE_MAX_CHARS,
   OBSERVE_MAX_FIND_TERMS,
@@ -26,6 +29,7 @@ import {
   asRecord,
   elementTableLines,
   findSnippets,
+  optionalBoolean,
   optionalCheck,
   optionalPositiveInt,
   optionalString,
@@ -191,6 +195,77 @@ export function createAutomationCapabilityProvider(
   const runStore = new RunStore();
   const byName = new Map(DESCRIPTORS.map((d) => [d.name, d]));
 
+  /**
+   * Races the run to completion: the planner's own `browser.automation.finish`
+   * call (via `run.settled`), the planner-liveness watchdog (a planner that
+   * ends its turn without ever calling `finish` - see planner-watcher.ts for
+   * the poll/nudge/fail cadence), or the run-level `timeoutMs`. Always runs
+   * to completion and persists the outcome via `runStore.finish`, whether or
+   * not `handleRun` is still waiting on it (see the `wait: false` branch
+   * below) - so `browser.automation.get` can recover the final result even
+   * for a run its caller never blocked on.
+   */
+  async function settleRun(
+    run: RunRecord,
+    agent: MarshalRuntimeAgent,
+    context: InvocationContext,
+    timeoutMs: number,
+    startedAt: number,
+  ): Promise<{ readonly output: unknown }> {
+    const runId = run.runId;
+    const watcher = watchPlannerLiveness({
+      run,
+      agentId: agent.id,
+      execute,
+      context,
+      finishAsFailed: (evidence) =>
+        runStore.finish(runId, { status: 'failed', evidence: [evidence] }),
+      ...(createPoller ? { createPoller } : {}),
+      ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
+    });
+
+    const timeoutPromise = new Promise<RunFinishPayload>((resolve) => {
+      const timer = scheduleTimeout(() => {
+        resolve({
+          status: 'timeout',
+          result: undefined,
+          evidence: [`Timed out after ${String(timeoutMs)}ms`],
+        });
+      }, timeoutMs);
+      void run.settled.then(() => {
+        timer.cancel();
+      });
+    });
+
+    const outcome = await Promise.race([run.settled, timeoutPromise]);
+    watcher.stop();
+    const timedOut = run.status === 'running';
+    if (timedOut) {
+      runStore.finish(runId, { status: 'timeout', evidence: outcome.evidence ?? [] });
+      await execute(
+        {
+          protocolVersion: RUNTIME_PROTOCOL_VERSION,
+          targetType: 'operation',
+          target: 'marshal.agent.cancel',
+          input: { agentId: agent.id },
+        },
+        context,
+      ).catch(() => undefined);
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const plannerUsage = await readPlannerUsage(execute, context, agent.id);
+    const finalStatus = timedOut ? 'timeout' : outcome.status;
+    return record({
+      runId,
+      status: finalStatus,
+      result: outcome.result,
+      evidence: outcome.evidence ?? [],
+      plannerSessionId: run.plannerSessionId,
+      stats: { ...runStats(run, durationMs), ...plannerUsage },
+    });
+  }
+
   async function handleRun(
     input: unknown,
     context: InvocationContext,
@@ -207,6 +282,7 @@ export function createAutomationCapabilityProvider(
     const timeoutMs = optionalPositiveInt(value['timeoutMs'], 'timeoutMs') ?? DEFAULT_TIMEOUT_MS;
     const workspaceName = optionalString(value['workspaceName'], 'workspaceName');
     const repoPath = optionalString(value['repoPath'], 'repoPath');
+    const wait = optionalBoolean(value['wait'], 'wait') ?? true;
 
     const status = await jevClient.status();
     if (status.state !== 'connected') {
@@ -247,16 +323,17 @@ export function createAutomationCapabilityProvider(
       // Fail closed: a planner without the allowlist gets every host tool (a live run used Bash for 100 s).
       const hostLacksAllowlist = rejectsAllowedTools(launchResponse);
       if (hostLacksAllowlist) run.allowlistApplied = false;
-      runStore.finish(runId, { status: 'failed' });
+      const errorMessage = hostLacksAllowlist
+        ? 'This Marshal host does not support allowedTools on marshal.agent.launch; update Marshal to run the planner.'
+        : (launchResponse.error?.message ?? 'marshal.agent.launch did not succeed');
+      runStore.finish(runId, { status: 'failed', error: errorMessage });
       return record({
         runId,
         status: 'failed',
         result: undefined,
         evidence: [],
         stats: runStats(run, Date.now() - startedAt),
-        error: hostLacksAllowlist
-          ? 'This Marshal host does not support allowedTools on marshal.agent.launch; update Marshal to run the planner.'
-          : (launchResponse.error?.message ?? 'marshal.agent.launch did not succeed'),
+        error: errorMessage,
       });
     }
     const agent: MarshalRuntimeAgent = (
@@ -265,61 +342,16 @@ export function createAutomationCapabilityProvider(
     run.plannerAgentId = agent.id;
     run.plannerSessionId = agent.sessionId ?? agent.id;
 
-    // Guards against a planner that ends its turn without ever calling
-    // browser.automation.finish - without this, such a run would otherwise
-    // block for the full `timeoutMs` (default 15 minutes). See
-    // planner-watcher.ts for the poll/nudge/fail cadence.
-    const watcher = watchPlannerLiveness({
-      run,
-      agentId: agent.id,
-      execute,
-      context,
-      finishAsFailed: (evidence) =>
-        runStore.finish(runId, { status: 'failed', evidence: [evidence] }),
-      ...(createPoller ? { createPoller } : {}),
-      ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
-    });
-
-    const timeoutPromise = new Promise<RunFinishPayload>((resolve) => {
-      const timer = scheduleTimeout(() => {
-        resolve({
-          status: 'failed',
-          result: undefined,
-          evidence: [`Timed out after ${String(timeoutMs)}ms`],
-        });
-      }, timeoutMs);
-      void run.settled.then(() => {
-        timer.cancel();
-      });
-    });
-
-    const outcome = await Promise.race([run.settled, timeoutPromise]);
-    watcher.stop();
-    const timedOut = run.status === 'running';
-    if (timedOut) {
-      run.status = 'timeout';
-      await execute(
-        {
-          protocolVersion: RUNTIME_PROTOCOL_VERSION,
-          targetType: 'operation',
-          target: 'marshal.agent.cancel',
-          input: { agentId: agent.id },
-        },
-        context,
-      ).catch(() => undefined);
+    const settlement = settleRun(run, agent, context, timeoutMs, startedAt);
+    if (!wait) {
+      // Detached mode: the caller gets the runId right away, before the run
+      // is anywhere near done, so it is never lost to a host-side background
+      // move. settleRun keeps running and still persists its outcome via
+      // runStore.finish; nothing here awaits it.
+      settlement.catch(() => undefined);
+      return record({ runId, status: 'running', plannerSessionId: run.plannerSessionId });
     }
-
-    const durationMs = Date.now() - startedAt;
-    const plannerUsage = await readPlannerUsage(execute, context, agent.id);
-    const finalStatus = timedOut ? 'timeout' : outcome.status;
-    return record({
-      runId,
-      status: finalStatus,
-      result: outcome.result,
-      evidence: outcome.evidence ?? [],
-      plannerSessionId: run.plannerSessionId,
-      stats: { ...runStats(run, durationMs), ...plannerUsage },
-    });
+    return settlement;
   }
 
   async function handleSubgoal(input: unknown): Promise<{ readonly output: unknown }> {
@@ -448,6 +480,37 @@ export function createAutomationCapabilityProvider(
     return record(summarize(run));
   }
 
+  /** Finds a run again when its runId was lost - see browser.automation.list. */
+  function handleList(input: unknown): { readonly output: unknown } {
+    const value = asRecord(input, 'browser.automation.list');
+    const limit = optionalPositiveInt(value['limit'], 'limit') ?? LIST_DEFAULT_LIMIT;
+    if (limit > LIST_MAX_LIMIT) {
+      throw new Error(
+        `AUTOMATION_INVALID_INPUT: "limit" must be at most ${String(LIST_MAX_LIMIT)}`,
+      );
+    }
+    // RunStore.list() is creation-ordered (oldest first, Map insertion order);
+    // reversing it is newest-first even for runs created in the same
+    // millisecond, where sorting by parsed `createdAt` would tie and fall
+    // back to insertion order anyway.
+    const runs = runStore
+      .list()
+      .slice()
+      .reverse()
+      .slice(0, limit)
+      .map((r) => ({
+        runId: r.runId,
+        goal:
+          r.goal.length > LIST_GOAL_EXCERPT_CHARS
+            ? `${r.goal.slice(0, LIST_GOAL_EXCERPT_CHARS)}…`
+            : r.goal,
+        status: r.status,
+        createdAt: r.createdAt,
+        plannerSessionId: r.plannerSessionId,
+      }));
+    return record({ runs });
+  }
+
   return {
     id: PROVIDER_ID,
     version: '1.0.0',
@@ -469,6 +532,8 @@ export function createAutomationCapabilityProvider(
           return handleFinish(input);
         case 'browser.automation.get':
           return handleGet(input);
+        case 'browser.automation.list':
+          return handleList(input);
         default:
           throw new Error(`AUTOMATION_UNKNOWN_CAPABILITY: ${name}`);
       }
@@ -485,6 +550,7 @@ interface RunSummary {
   readonly subgoals: RunRecord['subgoals'];
   readonly result?: unknown;
   readonly evidence?: readonly string[];
+  readonly error?: string;
 }
 
 function summarize(run: RunRecord): RunSummary {
@@ -496,7 +562,11 @@ function summarize(run: RunRecord): RunSummary {
     stats: runStats(run, (run.finishedAtMs ?? Date.now()) - Date.parse(run.createdAt)),
     subgoals: run.subgoals,
     ...(run.finishPayload
-      ? { result: run.finishPayload.result, evidence: run.finishPayload.evidence ?? [] }
+      ? {
+          result: run.finishPayload.result,
+          evidence: run.finishPayload.evidence ?? [],
+          ...(run.finishPayload.error ? { error: run.finishPayload.error } : {}),
+        }
       : {}),
   };
 }

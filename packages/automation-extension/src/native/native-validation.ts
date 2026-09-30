@@ -32,6 +32,14 @@ export function optionalPositiveInt(value: unknown, field: string): number | und
   return value;
 }
 
+export function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new Error(`AUTOMATION_INVALID_INPUT: "${field}" must be a boolean`);
+  }
+  return value;
+}
+
 export function optionalValuesMap(value: unknown): Record<string, string> | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {

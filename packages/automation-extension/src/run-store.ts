@@ -11,9 +11,11 @@ export interface SubgoalHistoryEntry {
 }
 
 export interface RunFinishPayload {
-  readonly status: 'succeeded' | 'failed' | 'blocked';
+  readonly status: 'succeeded' | 'failed' | 'blocked' | 'timeout';
   readonly result?: unknown;
   readonly evidence?: readonly string[];
+  /** Set when the run never got a real result (launch failure, timeout); see browser.automation.get. */
+  readonly error?: string;
 }
 
 export interface RunRecord {
@@ -92,6 +94,11 @@ export class RunStore {
 
   get(runId: string): RunRecord | undefined {
     return this.runs.get(runId);
+  }
+
+  /** All runs known to this store (any status), in creation order. See browser.automation.list. */
+  list(): readonly RunRecord[] {
+    return [...this.runs.values()];
   }
 
   requireActive(runId: string): RunRecord {

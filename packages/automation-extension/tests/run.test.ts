@@ -469,6 +469,168 @@ describe('browser.automation.run', () => {
     });
   });
 
+  it('run with wait:false returns the runId immediately, and get later reports the final result', async () => {
+    const provider = createAutomationCapabilityProvider({
+      host: makeHost(),
+      jevClient: {
+        status: async () => ({ state: 'connected', model: 'jev-latest' }),
+        ask: vi.fn(),
+      },
+      execute: vi.fn(
+        async (request: RuntimeOperationExecuteRequest): Promise<RuntimeExecResponse> => {
+          if (request.target === 'marshal.agent.launch') {
+            return {
+              protocolVersion: '1.0.0',
+              status: 'success',
+              result: { output: AGENT_OUTPUT },
+              receipt: {},
+            };
+          }
+          throw new Error('unexpected');
+        },
+      ),
+      configuration: {},
+      createRunId: () => 'run-detached',
+    });
+
+    const result = await provider.invoke(
+      'browser.automation.run',
+      { goal: 'g', wait: false },
+      callerContext('main'),
+    );
+    expect(result.output).toEqual({
+      runId: 'run-detached',
+      status: 'running',
+      plannerSessionId: 'planner-session-1',
+    });
+
+    const midGet = await provider.invoke(
+      'browser.automation.get',
+      { runId: 'run-detached' },
+      callerContext('main'),
+    );
+    expect((midGet.output as { status: string }).status).toBe('running');
+
+    await provider.invoke(
+      'browser.automation.finish',
+      { runId: 'run-detached', status: 'succeeded', result: { ok: true }, evidence: ['done'] },
+      callerContext('planner-session-1'),
+    );
+    // Let the background settlement (unawaited by run's wait:false response) finish.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const finalGet = await provider.invoke(
+      'browser.automation.get',
+      { runId: 'run-detached' },
+      callerContext('main'),
+    );
+    expect(finalGet.output).toMatchObject({
+      runId: 'run-detached',
+      status: 'succeeded',
+      result: { ok: true },
+      evidence: ['done'],
+    });
+  });
+
+  it('rejects a non-boolean wait', async () => {
+    const provider = createAutomationCapabilityProvider({
+      host: makeHost(),
+      jevClient: {
+        status: async () => ({ state: 'connected', model: 'jev-latest' }),
+        ask: vi.fn(),
+      },
+      execute: vi.fn(),
+      configuration: {},
+    });
+    await expect(
+      provider.invoke('browser.automation.run', { goal: 'g', wait: 'nope' }, callerContext('main')),
+    ).rejects.toThrow(/"wait"/);
+  });
+
+  it('get reports evidence for a run that timed out (not just an empty result)', async () => {
+    const execute = vi.fn(
+      async (request: RuntimeOperationExecuteRequest): Promise<RuntimeExecResponse> => {
+        if (request.target === 'marshal.agent.launch') {
+          return {
+            protocolVersion: '1.0.0',
+            status: 'success',
+            result: { output: AGENT_OUTPUT },
+            receipt: {},
+          };
+        }
+        if (request.target === 'marshal.agent.cancel') {
+          return {
+            protocolVersion: '1.0.0',
+            status: 'success',
+            result: { output: {} },
+            receipt: {},
+          };
+        }
+        throw new Error(`unexpected operation ${request.target}`);
+      },
+    );
+    const provider = createAutomationCapabilityProvider({
+      host: makeHost(),
+      jevClient: {
+        status: async () => ({ state: 'connected', model: 'jev-latest' }),
+        ask: vi.fn(),
+      },
+      execute,
+      configuration: {},
+      createRunId: () => 'run-timeout-get',
+      scheduleTimeout: (callback) => {
+        queueMicrotask(callback);
+        return { cancel: () => undefined };
+      },
+    });
+
+    const result = await provider.invoke(
+      'browser.automation.run',
+      { goal: 'g', timeoutMs: 1 },
+      callerContext('main'),
+    );
+    expect(result.output).toMatchObject({ status: 'timeout' });
+
+    const got = await provider.invoke(
+      'browser.automation.get',
+      { runId: 'run-timeout-get' },
+      callerContext('main'),
+    );
+    expect(got.output).toMatchObject({
+      status: 'timeout',
+      evidence: ['Timed out after 1ms'],
+    });
+  });
+
+  it('get reports the error for a run whose planner failed to launch', async () => {
+    const execute = vi.fn(
+      async (): Promise<RuntimeExecResponse> =>
+        ({
+          protocolVersion: '1.0.0',
+          status: 'failed',
+          error: { code: 'operation_failed', message: 'boom' },
+        }) as RuntimeExecResponse,
+    );
+    const provider = createAutomationCapabilityProvider({
+      host: makeHost(),
+      jevClient: {
+        status: async () => ({ state: 'connected', model: 'jev-latest' }),
+        ask: vi.fn(),
+      },
+      execute,
+      configuration: {},
+      createRunId: () => 'run-launch-fail',
+    });
+
+    await provider.invoke('browser.automation.run', { goal: 'g' }, callerContext('main'));
+    const got = await provider.invoke(
+      'browser.automation.get',
+      { runId: 'run-launch-fail' },
+      callerContext('main'),
+    );
+    expect(got.output).toMatchObject({ status: 'failed', error: 'boom' });
+  });
+
   it('forwards optional workspaceName/repoPath to marshal.agent.launch and omits them by default', async () => {
     const launches: RuntimeOperationExecuteRequest[] = [];
     const execute = vi.fn(
@@ -523,6 +685,77 @@ describe('browser.automation.run', () => {
         callerContext('x'),
       ),
     ).rejects.toThrow('AUTOMATION_UNKNOWN_RUN');
+  });
+});
+
+describe('browser.automation.list', () => {
+  function makeListProvider(
+    createRunId: () => string,
+  ): ReturnType<typeof createAutomationCapabilityProvider> {
+    return createAutomationCapabilityProvider({
+      host: makeHost(),
+      jevClient: {
+        status: async () => ({ state: 'connected', model: 'jev-latest' }),
+        ask: vi.fn(),
+      },
+      execute: vi.fn(
+        async (request: RuntimeOperationExecuteRequest): Promise<RuntimeExecResponse> => {
+          if (request.target === 'marshal.agent.launch') {
+            return {
+              protocolVersion: '1.0.0',
+              status: 'success',
+              result: { output: AGENT_OUTPUT },
+              receipt: {},
+            };
+          }
+          throw new Error('unexpected');
+        },
+      ),
+      configuration: {},
+      createRunId,
+    });
+  }
+
+  it('lists runs newest first, for recovering a runId that was lost', async () => {
+    let n = 0;
+    const provider = makeListProvider(() => `run-list-${++n}`);
+
+    await provider.invoke(
+      'browser.automation.run',
+      { goal: 'first goal', wait: false },
+      callerContext('main'),
+    );
+    await provider.invoke(
+      'browser.automation.run',
+      { goal: 'second goal', wait: false },
+      callerContext('main'),
+    );
+
+    const listed = await provider.invoke('browser.automation.list', {}, callerContext('main'));
+    const runs = (listed.output as { runs: Array<{ runId: string; goal: string }> }).runs;
+    expect(runs.map((r) => r.runId)).toEqual(['run-list-2', 'run-list-1']);
+    expect(runs[0]).toMatchObject({ goal: 'second goal', status: 'running' });
+  });
+
+  it('truncates a long goal to an excerpt', async () => {
+    const provider = makeListProvider(() => 'run-long-goal');
+    await provider.invoke(
+      'browser.automation.run',
+      { goal: 'g'.repeat(500), wait: false },
+      callerContext('main'),
+    );
+
+    const listed = await provider.invoke('browser.automation.list', {}, callerContext('main'));
+    const [run] = (listed.output as { runs: Array<{ goal: string }> }).runs;
+    expect(run?.goal.length).toBe(201);
+    expect(run?.goal.endsWith('…')).toBe(true);
+  });
+
+  it('respects limit and rejects a limit above the max', async () => {
+    const provider = makeListProvider(() => 'run-limit');
+    await expect(
+      provider.invoke('browser.automation.list', { limit: 1000 }, callerContext('main')),
+    ).rejects.toThrow(/"limit"/);
   });
 });
 
