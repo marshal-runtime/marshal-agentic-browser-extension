@@ -12,7 +12,7 @@ import type {
   ScreencastHandle as TargetScreencastHandle,
   ScreencastOptions,
 } from '../target.js';
-import { BridgeError, type BridgeClient } from './bridge.js';
+import { bridgeErrorOf, type BridgeClient } from './bridge.js';
 import { decodePng, encodeJpeg, scaleTo } from './image.js';
 
 export type { ScreencastFrameMeta, ScreencastOptions };
@@ -53,8 +53,7 @@ export async function startScreencast(
       quality: EVENT_QUALITY,
     });
   } catch (error) {
-    if (error instanceof BridgeError && error.code === 'unsupported')
-      return poll(deps, maxWidth, nth, onFrame);
+    if (bridgeErrorOf(error)?.code === 'unsupported') return poll(deps, maxWidth, nth, onFrame);
     throw error;
   }
   return events(deps, onFrame);

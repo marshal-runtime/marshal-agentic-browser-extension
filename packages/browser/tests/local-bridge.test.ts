@@ -463,9 +463,10 @@ describe('carried bridge client: the browserbridge.* names the user backend call
     });
     const status = await userBrowserStatus(client);
     expect(status.reason).toBe('not_connected');
-    expect(status.setup?.chromeExtension.bridgeAddress).toBe(bridge.status().url);
+    const setup = status.setup && 'chromeExtension' in status.setup ? status.setup : undefined;
+    expect(setup?.chromeExtension.bridgeAddress).toBe(bridge.status().url);
     expect(status.setup?.steps.join('\n')).toContain(bridge.status().url);
-    const folder = status.setup?.chromeExtension.folder;
+    const folder = setup?.chromeExtension.folder;
     expect(
       folder && path.isAbsolute(folder) && existsSync(path.join(folder, 'manifest.json')),
     ).toBe(true);

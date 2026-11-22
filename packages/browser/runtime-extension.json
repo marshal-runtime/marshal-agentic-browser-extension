@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "identity": "@marshal/browser",
   "displayName": "Browser",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "entrypoint": "dist/runtime.cjs",
   "moduleFormat": "commonjs-bundle-v1",
   "configuration": {
@@ -82,6 +82,28 @@
           "type": "string",
           "minLength": 1,
           "description": "Absolute folder the carried Marley Chrome extension is copied to at activation, for Load unpacked; it outlives updates of this package. Default ~/.marshal/browser/chrome-extension."
+        },
+        "profileSlot": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "A worker slot's own lasting profile: <profileRoot>/agent-<slot> (Chrome refuses two browsers on one profile)."
+        },
+        "tempRoot": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute parent folder of the throwaway visitor/offline profiles (default the system temp folder); keep it short."
+        },
+        "chromeSandbox": {
+          "type": "boolean",
+          "description": "Chrome's own sandbox (default true); false adds --no-sandbox for a host whose service limits forbid it."
+        },
+        "localBridge": {
+          "type": "boolean",
+          "description": "Open the loopback bridge the person's Chrome connects to (default true). False: no 127.0.0.1 listener; the user backend reports no_socket."
+        },
+        "carryChromeExtension": {
+          "type": "boolean",
+          "description": "Copy the carried Marley Chrome extension to chromeExtensionDir at activation (default true)."
         }
       },
       "additionalProperties": false

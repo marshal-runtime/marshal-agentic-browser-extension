@@ -38,6 +38,43 @@ export interface LauncherOptions {
   readonly platform?: NodeJS.Platform;
   /** The process's user id (tests); default `process.getuid()`. */
   readonly uid?: number;
+  /**
+   * A worker slot's own lasting profile: `<profileRoot>/agent-<slot>` instead of `<profileRoot>/agent` (Chrome refuses a
+   * second browser on one profile, so concurrent workers of one host each name their slot). Letters, digits, `_`, `-`.
+   */
+  readonly profileSlot?: string;
+  /** Parent folder of the throwaway (visitor / offline) profiles; default os.tmpdir(). Keep it short: Chrome's sockets live there. */
+  readonly tempRoot?: string;
+  /** Chrome's own sandbox (default true). False adds --no-sandbox, for a host whose service limits forbid it. */
+  readonly chromeSandbox?: boolean;
+}
+
+/**
+ * An embedding host's hook before each Chrome start (an embedded host only; never from configuration): it may start a
+ * display and return the environment Chrome gets (DISPLAY and XAUTHORITY are taken only from here, never inherited) and
+ * whether the lasting browser shows its window.
+ */
+export type PrepareLaunch = (start: {
+  readonly kind: 'lasting' | 'ephemeral';
+  readonly headed: boolean;
+}) => Promise<
+  | {
+      readonly env?: Readonly<Record<string, string>>;
+      readonly headed?: boolean;
+    }
+  | null
+  | undefined
+>;
+
+const SLOT = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The lasting profile's folder for these options; throws on a slot that is not a plain name. */
+export function agentProfileDir(options: LauncherOptions): string {
+  const root = options.profileRoot ?? path.join(os.homedir(), '.marshal', 'browser', 'profiles');
+  if (options.profileSlot === undefined) return path.join(root, 'agent');
+  if (!SLOT.test(options.profileSlot))
+    throw new Error('BROWSER_BAD_CONFIGURATION: profileSlot must be 1-64 letters, digits, _ or -');
+  return path.join(root, `agent-${options.profileSlot}`);
 }
 
 export const DEAD_PROXY = 'http://127.0.0.1:9';
@@ -55,6 +92,7 @@ export function chromeArgs(
   headed: boolean,
   platform: NodeJS.Platform = process.platform,
   uid: number | undefined = process.getuid?.(),
+  sandbox = true,
 ): string[] {
   return [
     '--remote-debugging-pipe',
@@ -77,7 +115,7 @@ export function chromeArgs(
     // refuses to start as root without --no-sandbox. Same rule as Page Studio's old launcher (main 833836a,
     // src/extension/browser.ts:27-29): Linux only, and --no-sandbox only for root.
     ...(platform === 'linux' ? ['--disable-dev-shm-usage'] : []),
-    ...(platform === 'linux' && uid === 0 ? ['--no-sandbox'] : []),
+    ...((platform === 'linux' && uid === 0) || !sandbox ? ['--no-sandbox'] : []),
     // --disable-gpu-compositing: a GPU-composited capture taller than 16,384 device px (Chrome's largest texture) repeats
     // the top of the page past that row. Software compositing keeps hardware WebGL, which --disable-gpu would remove.
     ...(headed
@@ -276,7 +314,10 @@ export class ChromeLauncher {
   private lasting: Promise<ChromeProcess> | null = null;
   private ephemeral: Promise<ChromeProcess> | null = null;
 
-  constructor(private readonly options: LauncherOptions = {}) {}
+  constructor(
+    private readonly options: LauncherOptions = {},
+    private readonly prepare?: PrepareLaunch,
+  ) {}
 
   /** The process that serves `profile`, started on first use and restarted if it died. */
   async processFor(profile: ManagedProfile): Promise<ChromeProcess> {
@@ -317,18 +358,33 @@ export class ChromeLauncher {
   private async start(kind: 'lasting' | 'ephemeral'): Promise<ChromeProcess> {
     const found = findChrome(this.options);
     if (!found.path) throw new Error(`BROWSER_UNAVAILABLE: ${found.reason ?? 'no Chrome'}`);
-    const headed = kind === 'lasting' && isHeaded(this.options);
+    let headed = kind === 'lasting' && isHeaded(this.options);
+    let childEnv: NodeJS.ProcessEnv | undefined;
+    if (this.prepare) {
+      const prepared = await this.prepare({ kind, headed });
+      // The host owns the display: an inherited DISPLAY may name an X server that died with the host's last stop.
+      childEnv = { ...process.env };
+      delete childEnv['DISPLAY'];
+      delete childEnv['XAUTHORITY'];
+      Object.assign(childEnv, prepared?.env ?? {});
+      if (kind === 'lasting' && prepared?.headed !== undefined) headed = prepared.headed;
+      if (headed && !childEnv['DISPLAY'] && (this.options.platform ?? process.platform) === 'linux')
+        headed = false;
+    }
     let userDataDir: string;
     let temporary = false;
     if (kind === 'lasting') {
-      userDataDir = path.join(
-        this.options.profileRoot ?? path.join(os.homedir(), '.marshal', 'browser', 'profiles'),
-        'agent',
-      );
+      userDataDir = agentProfileDir(this.options);
       await prepareAgentDir(userDataDir);
     } else {
-      sweepStaleProfiles();
-      userDataDir = await mkdtemp(path.join(os.tmpdir(), TEMP_PREFIX));
+      const tempRoot = this.options.tempRoot ?? os.tmpdir();
+      if (this.options.tempRoot !== undefined) {
+        if (!path.isAbsolute(tempRoot))
+          throw new Error('BROWSER_BAD_CONFIGURATION: tempRoot must be an absolute path');
+        await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+      }
+      sweepStaleProfiles(tempRoot);
+      userDataDir = await mkdtemp(path.join(tempRoot, TEMP_PREFIX));
       temporary = true;
       LIVE_TEMP_DIRS.add(userDataDir);
       await writeEphemeralPreferences(userDataDir);
@@ -340,8 +396,12 @@ export class ChromeLauncher {
       headed,
       this.options.platform,
       this.options.uid ?? process.getuid?.(),
+      this.options.chromeSandbox !== false,
     );
-    const child = spawn(found.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    const child = spawn(found.path, args, {
+      stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
+      ...(childEnv ? { env: childEnv } : {}),
+    });
     LIVE_CHILDREN.add(child);
     let stderr = '';
     child.stderr?.setEncoding('utf8');

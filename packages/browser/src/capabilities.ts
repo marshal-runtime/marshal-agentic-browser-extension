@@ -7,7 +7,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { AppService, defaultPackageRoot, type AppServiceDeps } from './app/service.js';
-import { ChromeLauncher, findChrome, isHeaded, type LauncherOptions } from './chrome/launcher.js';
+import {
+  ChromeLauncher,
+  findChrome,
+  isHeaded,
+  type LauncherOptions,
+  type PrepareLaunch,
+} from './chrome/launcher.js';
 import { ManagedTab } from './chrome/tab.js';
 import type {
   CapabilityDescriptor,
@@ -25,11 +31,17 @@ import { DESCRIPTORS } from './descriptors.js';
 import { defaultArtifactRoot, Lifecycle } from './lifecycle.js';
 import { RecorderUnavailable, type Recording, type VideoResult } from './record/recorder.js';
 import { ABORTED, keepEndPicture, untilAborted, type TaskEntry } from './tasks.js';
-import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
+import {
+  DECISION_SHOT,
+  TargetHalt,
+  type ManagedProfile,
+  type Shot,
+  type TargetAction,
+} from './target.js';
 import type { BridgeClient } from './user/bridge.js';
 import { triageGoal, type Triage } from './engine/triage.js';
 import { routeTask } from './user/routing.js';
-import { userBrowserStatus, UserNotPaired } from './user/status.js';
+import { userBrowserStatus, UserNotPaired, type UserSetupOverride } from './user/status.js';
 import * as sessionOps from './session-ops.js';
 import { MODIFIERS, PRESS_KEYS, type Modifier, type PressKey } from './target.js';
 import { UserTab } from './user/tab.js';
@@ -52,7 +64,22 @@ export interface BrowserConfiguration extends LauncherOptions, SpeedConfiguratio
   readonly bridgePort?: number;
   /** Stable folder the carried Chrome extension is copied to for Load unpacked (default ~/.marshal/browser/chrome-extension). */
   readonly chromeExtensionDir?: string;
+  /** Open the loopback bridge the person's Chrome connects to (default true in Marshal, false when embedded). */
+  readonly localBridge?: boolean;
+  /** Copy the carried Chrome extension to chromeExtensionDir at activation (default true in Marshal, false when embedded). */
+  readonly carryChromeExtension?: boolean;
 }
+
+/** An embedding host's hooks (functions, so never from configuration). */
+export interface BrowserHostHooks {
+  /** Its own setup for the person's Chrome, replacing the carried extension's Load-unpacked steps. */
+  readonly userSetup?: UserSetupOverride;
+  /** Called before each Chrome start: may start a display, give Chrome's environment and choose headed. */
+  readonly prepareLaunch?: PrepareLaunch;
+}
+
+/** The provider's version (runtime-extension.json and package.json carry the same). */
+export const VERSION = '0.4.0';
 
 const IDLE_MS = 10 * 60_000;
 const PROFILES: readonly ManagedProfile[] = ['agent', 'visitor', 'offline'];
@@ -80,8 +107,9 @@ export class BrowserService {
     private readonly bridgeFor?: (context?: InvocationContext) => BridgeClient,
     appDeps: Partial<AppServiceDeps> = {},
     execute?: RuntimeExecuteFn,
+    private readonly hooks: BrowserHostHooks = {},
   ) {
-    this.launcher = new ChromeLauncher(configuration);
+    this.launcher = new ChromeLauncher(configuration, hooks.prepareLaunch);
     this.apps = new AppService({
       packageRoot: defaultPackageRoot(),
       configuration,
@@ -109,7 +137,7 @@ export class BrowserService {
   provider(): CapabilityProvider {
     return {
       id: '@marshal/browser',
-      version: '0.3.0',
+      version: VERSION,
       list: () => DESCRIPTORS,
       get: (name) => DESCRIPTORS.find((descriptor) => descriptor.name === name),
       invoke: (name, input, context) => this.invoke(name, input, context),
@@ -141,8 +169,20 @@ export class BrowserService {
       if (this.lifecycle.handles(name))
         return { output: await this.lifecycle.invoke(name, args, context) };
       const forApp = args['on'] === 'app' || this.apps.owns(args['sessionId']);
-      if (forApp && name !== 'browser.status')
+      if (forApp && name !== 'browser.status') {
+        // Native apps are driven on macOS only: elsewhere no helper is looked for or started.
+        if ((this.configuration.platform ?? process.platform) !== 'darwin')
+          return {
+            output: {
+              ok: false,
+              status: 'unavailable',
+              backend: 'app',
+              reason: 'not_macos',
+              error: 'BROWSER_APP_UNAVAILABLE: native apps are driven on macOS only',
+            },
+          };
         return { output: await this.invokeApp(name, args, decider) };
+      }
       switch (name) {
         case 'browser.status':
           return { output: await this.status(decider, bridge) };
@@ -177,6 +217,7 @@ export class BrowserService {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof TargetHalt) return { output: await this.haltOutput(error, bridge) };
       if (error instanceof UserNotPaired)
         return {
           output: {
@@ -245,7 +286,10 @@ export class BrowserService {
 
   async status(decider: Decider, bridge?: BridgeClient): Promise<Record<string, unknown>> {
     const chrome = findChrome(this.configuration);
-    const [decide, user] = await Promise.all([decider.probe(), userBrowserStatus(bridge)]);
+    const [decide, user] = await Promise.all([
+      decider.probe(),
+      userBrowserStatus(bridge, undefined, this.hooks.userSetup),
+    ]);
     return {
       ok: true,
       backends: [
@@ -279,13 +323,36 @@ export class BrowserService {
     return session;
   }
 
+  /** The answer for a step the transport halted: its status and reason, and the pairing help when the Chrome left. */
+  private async haltOutput(
+    halt: TargetHalt,
+    bridge?: BridgeClient,
+  ): Promise<Record<string, unknown>> {
+    const left = halt.reason === 'user_browser_not_connected';
+    const status = left
+      ? await userBrowserStatus(bridge, undefined, this.hooks.userSetup).catch(() => null)
+      : null;
+    return {
+      ok: false,
+      status: halt.status,
+      reason: halt.reason,
+      error: halt.message,
+      ...(status && !status.ready
+        ? {
+            userBrowser: { reason: status.reason, detail: status.detail },
+            ...(status.setup ? { setup: status.setup } : {}),
+          }
+        : {}),
+    };
+  }
+
   /** A background tab in the person's own Chrome. Refused with the pairing reason when it is not paired. */
   private async openUserTab(bridge: BridgeClient | undefined, url: unknown): Promise<Session> {
     if (typeof url !== 'string')
       throw new Error(
         "BROWSER_BAD_INPUT: the person's own Chrome needs a start url (http or https)",
       );
-    const status = await userBrowserStatus(bridge);
+    const status = await userBrowserStatus(bridge, undefined, this.hooks.userSetup);
     if (!status.ready || !bridge) throw new UserNotPaired(status);
     const tab = await UserTab.open(bridge, url);
     const session: Session = { id: randomUUID(), tab, profile: 'own', lastUsed: Date.now() };
@@ -377,11 +444,14 @@ export class BrowserService {
     const session = this.session(args, bridge);
     const action = parseAction(args['action']);
     const outcome = await session.tab.act(action);
-    // An open dialog blocks page reads; the caller answers it first (browser.session.dialog).
-    const snap = outcome.dialog ? null : await session.tab.snapshot().catch(() => null);
+    // An open dialog blocks page reads; the caller answers it first (browser.session.dialog). A step the transport
+    // halted is not followed by a read through the same refusal.
+    const snap =
+      outcome.dialog || outcome.halt ? null : await session.tab.snapshot().catch(() => null);
     return {
       ok: outcome.ok,
       ...(outcome.error ? { error: outcome.error } : {}),
+      ...(outcome.halt ? { status: outcome.halt.status, reason: outcome.halt.reason } : {}),
       ...(outcome.unsupported
         ? { status: 'unsupported_on_backend', backend: session.tab.backend }
         : {}),
@@ -519,7 +589,7 @@ export class BrowserService {
               });
               return triaged.request.then((answer) => answer.needsLogin);
             },
-            status: () => userBrowserStatus(bridge),
+            status: () => userBrowserStatus(bridge, undefined, this.hooks.userSetup),
           }),
         );
       } catch (error) {
@@ -554,10 +624,24 @@ export class BrowserService {
     const settings = engineSettings(this.configuration);
     try {
       if (signal.aborted) return cancelled;
-      session ??=
-        backend === 'user'
-          ? await this.openUserTab(bridge, startUrl)
-          : await this.openTab(profileOf(args['profile'], 'visitor'));
+      try {
+        session ??=
+          backend === 'user'
+            ? await this.openUserTab(bridge, startUrl)
+            : await this.openTab(profileOf(args['profile'], 'visitor'));
+      } catch (error) {
+        // The relay refused or lost the tab's opening: the task ends there, nothing is retried.
+        if (error instanceof TargetHalt)
+          return {
+            taskId,
+            backend,
+            ...(await this.haltOutput(error, bridge)),
+            ok: true,
+            trace: [],
+            artifacts: [],
+          };
+        throw error;
+      }
       task.target = session.tab;
       if (existing || keepOpen) task.sessionId = session.id;
       // Read again: a cancel can land while the tab opens.
@@ -641,7 +725,9 @@ export class BrowserService {
       if (recording) await this.lifecycle.abortVideo(recording);
       if (session) {
         session.lastUsed = Date.now();
-        await keepEndPicture(task, session.tab);
+        // A tab the relay halted gets no end picture: it would be one more step through the same refusal.
+        if (!(session.tab instanceof UserTab && session.tab.halted))
+          await keepEndPicture(task, session.tab);
         if (!existing && (!keepOpen || signal.aborted)) {
           this.sessions.delete(session.id);
           await session.tab.close();

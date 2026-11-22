@@ -108,6 +108,23 @@ export const unsupportedOn = (backend: BackendKind, what: string): ActOutcome =>
   error: `unsupported_on_backend: ${what} is not available on the ${backend} backend`,
 });
 
+/**
+ * A step the backend's transport refused or lost in a way that must end the task now, never be retried or worked
+ * around (an embedding host's relay): `needs_owner` (the person must approve or reconnect first; `setup` is the
+ * user backend's pairing help when the browser is gone) or `unknown` (the step was sent and its answer lost; it may
+ * have happened).
+ */
+export class TargetHalt extends Error {
+  constructor(
+    readonly status: 'needs_owner' | 'unknown',
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'TargetHalt';
+  }
+}
+
 export interface ActOutcome {
   readonly ok: boolean;
   readonly error?: string;
@@ -121,6 +138,8 @@ export interface ActOutcome {
   readonly unsupported?: boolean;
   /** A JavaScript dialog (alert, confirm, prompt, beforeunload) opened during the action and waits for an answer. */
   readonly dialog?: PageDialog;
+  /** The transport ended this step in a way the task must stop on (see TargetHalt); never retried. */
+  readonly halt?: { readonly status: 'needs_owner' | 'unknown'; readonly reason: string };
 }
 
 export interface PageDialog {

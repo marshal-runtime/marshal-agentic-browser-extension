@@ -131,3 +131,43 @@ export function createHostDecider(execute: RuntimeExecuteFn, context?: Invocatio
     },
   };
 }
+
+/**
+ * An embedding host's own decide function (a host without the `marshal.models.decide` capability, e.g. a brand VM that
+ * forwards each question set to its server): it takes the capability's input and answers with its output. The model,
+ * provider and key stay the host's; this package adds none (R5.2).
+ */
+export type DecideFunction = (
+  input: DecideMultiInput | DecideSchemaInput,
+  context?: InvocationContext,
+) => Promise<unknown>;
+
+/**
+ * `execute` answering only `marshal.models.decide` from a host's decide function, so the decider above keeps every
+ * check of the answer. The empty probe input is answered without a call; a thrown error is a host failure
+ * (`decisions_unavailable`), never a page verdict.
+ */
+export function decideFunctionExecute(
+  decide: DecideFunction,
+  fallback?: RuntimeExecuteFn,
+): RuntimeExecuteFn {
+  return async (request, context) => {
+    if (request.target !== DECIDE_CAPABILITY) {
+      if (fallback) return fallback(request, context);
+      return {
+        protocolVersion: RUNTIME_PROTOCOL_VERSION,
+        status: 'not_found',
+        error: { code: 'NOT_FOUND', message: `${request.target} is not offered by this host` },
+      };
+    }
+    const input = request.input as Record<string, unknown> | undefined;
+    if (!input || Object.keys(input).length === 0)
+      return {
+        protocolVersion: RUNTIME_PROTOCOL_VERSION,
+        status: 'success',
+        result: { output: { success: false, code: 'JEV_BAD_REQUEST', error: 'empty probe' } },
+      };
+    const output = await decide(input as unknown as DecideMultiInput | DecideSchemaInput, context);
+    return { protocolVersion: RUNTIME_PROTOCOL_VERSION, status: 'success', result: { output } };
+  };
+}

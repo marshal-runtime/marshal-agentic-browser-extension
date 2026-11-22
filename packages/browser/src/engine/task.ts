@@ -24,6 +24,7 @@ import {
 import type { DecideAnswer, DecideImage, DecideQuestion } from '../contracts.js';
 import {
   DECISION_SHOT,
+  TargetHalt,
   type ActOutcome,
   type Shot,
   type Snapshot,
@@ -40,7 +41,9 @@ export type TaskStatus =
   | 'budget'
   | 'decisions_unavailable'
   /** The caller cancelled the task (browser.task.cancel); no action was taken after the cancel. */
-  | 'cancelled';
+  | 'cancelled'
+  /** The last step was sent but its answer was lost (an embedding host's relay): it may have happened. Never retried. */
+  | 'unknown';
 
 export interface TaskWant {
   /** JSON schema of the data to return once the goal is met (rung 2). */
@@ -300,13 +303,23 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
   /** Saving step screenshots runs beside the decision; finish() waits for them. */
   const saving: Promise<void>[] = [];
 
+  /** Set when the transport halted the task (TargetHalt): finish() then sends nothing more to the page. */
+  let halted = false;
+  const halt = (stop: {
+    readonly status: 'needs_owner' | 'unknown';
+    readonly reason: string;
+  }): Promise<TaskResult> => {
+    halted = true;
+    return finish(stop.status, stop.reason);
+  };
   const finish = async (
     status: TaskStatus,
     reason?: string,
     extra: Partial<Pick<TaskResult, 'data' | 'text' | 'candidates' | 'element'>> = {},
   ): Promise<TaskResult> => {
-    // Every stop but a clean `done` carries what the page looked like, so the driver can decide from it.
-    if (status !== 'done' || input.want?.screenshot) {
+    // Every stop but a clean `done` carries what the page looked like, so the driver can decide from it. A halt by the
+    // transport takes none: the picture would be one more step through the same refusal (or a lost connection).
+    if ((status !== 'done' || input.want?.screenshot) && !halted) {
       try {
         artifacts.push({
           kind: 'screenshot',
@@ -407,6 +420,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         outcome: opened.ok ? 'ok' : 'failed',
         ...(opened.error ? { note: opened.error } : {}),
       });
+      if (!opened.ok && opened.halt) return halt(opened.halt);
       if (!opened.ok) return finish('blocked', `navigation_failed: ${opened.error ?? ''}`);
       history.push(`opened ${clip(input.startUrl, 100)}`);
     }
@@ -481,6 +495,10 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       missingRetried = false;
       if (outcome.navigated) navigated = true;
       const label = offer.element?.label ? ` "${clip(offer.element.label, 50)}"` : '';
+      if (!outcome.ok && outcome.halt) {
+        record('stop', outcome.error, actMs);
+        return { stop: await halt(outcome.halt) };
+      }
       if (!outcome.ok && outcome.needsRealInput) {
         record('stop', `needs real keyboard/mouse input: ${outcome.error ?? ''}`, actMs);
         return {
@@ -518,6 +536,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         snapMs = taken.ms;
       } catch (error) {
         if (error instanceof Cancelled) throw error;
+        if (error instanceof TargetHalt) return halt(error);
         return finish(
           'blocked',
           `snapshot_failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -841,6 +860,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
           planSnapMs = taken.ms;
         } catch (error) {
           if (error instanceof Cancelled) throw error;
+          if (error instanceof TargetHalt) return halt(error);
           ended = 'the page could not be read';
           break;
         }

@@ -23,8 +23,58 @@ export interface UserBrowserStatus {
   readonly extensionVersion?: string;
   /** Whether the bridge forwards live frames (events) or the side panel falls back to polled screenshots. */
   readonly screencast?: 'events' | 'polling';
-  /** When not paired: what to install or switch on, in order, for this reason (see `setupFor`). */
-  readonly setup?: UserBrowserSetup;
+  /** When not paired: what to install or switch on, in order, for this reason (see `setupFor`), or the host's own. */
+  readonly setup?: UserBrowserSetup | HostUserSetup;
+}
+
+/**
+ * An embedding host's own setup for the person's Chrome (its pairing page, its words), which replaces the carried
+ * extension's Load-unpacked steps: a host that does not carry the extension or its local socket must not tell the
+ * person to load a folder that is not there.
+ */
+export interface HostUserSetup {
+  readonly reason: Exclude<UserBrowserReason, 'paired'>;
+  readonly summary: string;
+  readonly steps: readonly string[];
+  /** Where the person pairs their Chrome with this host (an https address), when the host has one. */
+  readonly pairUrl?: string;
+  readonly source: 'host';
+}
+
+/** What an embedding host says for a reason the person's Chrome is not ready; undefined keeps the carried setup. */
+export type UserSetupOverride = (
+  reason: Exclude<UserBrowserReason, 'paired'>,
+  detail: string,
+) =>
+  | { readonly summary: string; readonly steps: readonly string[]; readonly pairUrl?: string }
+  | undefined;
+
+/** The host's setup, validated: plain text only, steps capped, a pair address only when it is https. */
+export function hostSetup(
+  override: UserSetupOverride,
+  reason: Exclude<UserBrowserReason, 'paired'>,
+  detail: string,
+): HostUserSetup | undefined {
+  const given = override(reason, detail);
+  if (!given || typeof given.summary !== 'string' || !Array.isArray(given.steps)) return undefined;
+  let pairUrl: string | undefined;
+  if (typeof given.pairUrl === 'string') {
+    try {
+      if (new URL(given.pairUrl).protocol === 'https:') pairUrl = given.pairUrl;
+    } catch {
+      // not an address: left out
+    }
+  }
+  return {
+    reason,
+    summary: given.summary.slice(0, 500),
+    steps: given.steps
+      .filter((step): step is string => typeof step === 'string')
+      .slice(0, 10)
+      .map((step) => step.slice(0, 500)),
+    ...(pairUrl ? { pairUrl } : {}),
+    source: 'host',
+  };
 }
 
 /**
@@ -246,8 +296,15 @@ export const DETAIL: Readonly<Record<Exclude<UserBrowserReason, 'paired'>, strin
 export async function userBrowserStatus(
   bridge: BridgeClient | undefined,
   carriedGiven?: CarriedExtension,
+  override?: UserSetupOverride,
 ): Promise<UserBrowserStatus> {
   const carried = carriedGiven ?? bridge?.carried;
+  const notReady = (
+    reason: Exclude<UserBrowserReason, 'paired'>,
+    status: BridgeStatus | undefined,
+    extra: string | undefined,
+    carriedNow: CarriedExtension | undefined,
+  ): UserBrowserStatus => notReadyStatus(reason, status, extra, carriedNow, override);
   if (!bridge)
     return notReady('no_socket', undefined, 'no bridge was started in this host', carried);
   let status: BridgeStatus;
@@ -289,17 +346,19 @@ export async function userBrowserStatus(
   return notReady('not_connected', status, undefined, carried);
 }
 
-function notReady(
+function notReadyStatus(
   reason: Exclude<UserBrowserReason, 'paired'>,
   status: BridgeStatus | undefined,
   extra: string | undefined,
   carried: CarriedExtension | undefined,
+  override: UserSetupOverride | undefined,
 ): UserBrowserStatus {
+  const detail = extra ? `${DETAIL[reason]} (${extra})` : DETAIL[reason];
   return {
     name: 'user',
     ready: false,
     reason,
-    detail: extra ? `${DETAIL[reason]} (${extra})` : DETAIL[reason],
-    setup: setupFor(reason, status, carried),
+    detail,
+    setup: (override && hostSetup(override, reason, detail)) ?? setupFor(reason, status, carried),
   };
 }
