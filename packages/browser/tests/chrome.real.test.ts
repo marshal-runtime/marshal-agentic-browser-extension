@@ -16,6 +16,7 @@ import type { Decider } from '../src/engine/decider.js';
 import type { DecideAnswer, DecideMultiInput } from '../src/contracts.js';
 import { DECISION_SHOT } from '../src/target.js';
 import { saveShot } from './helpers.js';
+import { BrowserService } from '../src/capabilities.js';
 
 /** Width and height from a JPEG's start-of-frame marker. */
 function jpegSize(data: Buffer): { width: number; height: number } | null {
@@ -68,12 +69,22 @@ const ICE_SCRIPT = `return await new Promise((resolve) => {
 });`;
 
 let server: http.Server;
+/** Every path the fixture server was asked for, with its Host header. */
+const requests: string[] = [];
 let base = '';
 
 beforeAll(async () => {
   server = http.createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
-    if (url.pathname === '/forms') {
+    requests.push(`${request.headers.host ?? ''}${url.pathname}`);
+    if (url.pathname === '/xform') {
+      // A search form that posts to another site: localhost is not 127.0.0.1's site.
+      const port = (server.address() as { port: number }).port;
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(
+        `<!doctype html><title>Docs</title><form action="http://localhost:${String(port)}/collect"><label>Search <input name="q" type="search"></label><button>Search</button></form>`,
+      );
+    } else if (url.pathname === '/forms') {
       response.writeHead(200, { 'content-type': 'text/html' });
       response.end(FORMS);
     } else if (url.pathname === '/') {
@@ -324,4 +335,102 @@ describe.skipIf(!chrome.path)('managed Chrome (real)', () => {
     },
     60_000,
   );
+
+  describe('the guards hold on the service paths of #5 (wait:false, cancel)', () => {
+    /** Types the value, then presses Enter; a gate lets a test hold the Enter decision. */
+    const scripted = (gate?: Promise<void>): Decider => ({
+      async judge(input) {
+        const offers = Object.keys(
+          (input.questions['next_action'] as { criteria: Record<string, string> }).criteria,
+        );
+        const pick =
+          offers.find((offer) => offer.startsWith('submit ')) ??
+          offers.find((offer) => offer.startsWith('type ')) ??
+          'blocked';
+        if (pick.startsWith('submit ') && gate) await gate;
+        const answers: Record<string, DecideAnswer> = {
+          next_action: {
+            type: 'choice',
+            choice: pick,
+            confidence: 0.9,
+            probabilities: { [pick]: 0.9 },
+          },
+          goal_met: { type: 'predicate', probability: 0.05 },
+          needs_owner: { type: 'predicate', probability: 0.02 },
+          page_ready: { type: 'predicate', probability: 0.98 },
+        };
+        return { success: true as const, answers };
+      },
+      extract: () => Promise.resolve({ success: true as const, choice: {} }),
+      probe: () => Promise.resolve({ available: true, detail: 'scripted' }),
+    });
+    const poll = async (
+      service: BrowserService,
+      taskId: string,
+    ): Promise<Record<string, unknown>> => {
+      for (let i = 0; i < 200; i += 1) {
+        const got = (await service.invoke('browser.task.get', { taskId })).output as Record<
+          string,
+          unknown
+        >;
+        if (got['result']) return got['result'] as Record<string, unknown>;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      throw new Error('task did not finish');
+    };
+
+    it('a background task (wait:false) stops at a form that sends off-site; nothing reaches the other host', async () => {
+      const service = new BrowserService(() => scripted(), { artifactDir: os.tmpdir() });
+      requests.length = 0;
+      try {
+        const started = (
+          await service.invoke('browser.task', {
+            goal: 'Search the docs for the value query',
+            startUrl: `${base}/xform`,
+            on: 'managed',
+            values: { query: 'private-term' },
+            wait: false,
+          })
+        ).output as Record<string, unknown>;
+        expect(started).toMatchObject({ state: 'running' });
+        const result = await poll(service, String(started['taskId']));
+        expect(result).toMatchObject({ status: 'needs_owner', reason: 'form_leaves_site' });
+        expect(requests.filter((entry) => entry.endsWith('/collect'))).toEqual([]);
+      } finally {
+        await service.dispose();
+      }
+    }, 90_000);
+
+    it('a task cancelled while it decides on the send never sends', async () => {
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const service = new BrowserService(() => scripted(gate), { artifactDir: os.tmpdir() });
+      requests.length = 0;
+      try {
+        const started = (
+          await service.invoke('browser.task', {
+            goal: 'Search the docs for the value query',
+            startUrl: `${base}/xform`,
+            on: 'managed',
+            values: { query: 'private-term' },
+            wait: false,
+          })
+        ).output as Record<string, unknown>;
+        const taskId = String(started['taskId']);
+        for (let i = 0; i < 100 && !requests.some((entry) => entry.endsWith('/xform')); i += 1)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const cancelling = service.invoke('browser.task.cancel', { taskId });
+        open();
+        await cancelling;
+        const result = await poll(service, taskId);
+        expect(result['status']).toBe('cancelled');
+        expect(requests.filter((entry) => entry.endsWith('/collect'))).toEqual([]);
+      } finally {
+        await service.dispose();
+      }
+    }, 90_000);
+  });
 });

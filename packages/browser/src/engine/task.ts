@@ -8,15 +8,7 @@
  * The driving agent is rung 3: every stop it cannot settle comes back as a typed status, never a bigger model here.
  */
 import { DecideError, type Decider } from './decider.js';
-import {
-  formNeedsOwner,
-  isSubmitControl,
-  leftHome,
-  linkNeedsOwner,
-  signalNeedsOwner,
-  privateHost,
-  siteOf,
-} from './guards.js';
+import { actionGuard, leftHome, privateHost, siteOf } from './guards.js';
 import { actionOf, buildOffers, clip, maskValues, unmaskValues, type Offer } from './offers.js';
 import type { DecideAnswer, DecideImage, DecideQuestion } from '../contracts.js';
 import {
@@ -590,67 +582,16 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         record('stop', 'no progress possible');
         return finish('blocked', 'no_progress_possible');
       }
-      // Code guards: never left to the model.
-      // Typing, choosing or sending happens only on the home site, whatever moved the tab off it (a script, a redirect).
-      if (
-        (offer.kind === 'type' || offer.kind === 'submit' || offer.kind === 'select') &&
-        leftHome(home, snapshot.url, allowedSites)
-      ) {
-        record('stop', `the page is no longer on the task's site (${home ?? ''})`);
-        return finish('needs_owner', 'left_site', {
-          ...(offer.element
-            ? { element: { ref: offer.element.ref, label: offer.element.label } }
-            : {}),
-        });
-      }
-      // A form is checked by where it sends, before Enter in one of its fields or a click on its submit button. An app
-      // window has no web forms (its Enter is AXConfirm; a sheet's default button is a typed owner signal below).
-      if (
-        deps.target.backend !== 'app' &&
-        offer.element &&
-        (offer.kind === 'submit' || (offer.kind === 'click' && isSubmitControl(offer.element)))
-      ) {
-        const why = formNeedsOwner(
-          offer.element,
-          snapshot,
-          allowedSites,
-          lastTyped !== null || holdsCallerValue(snapshot, values),
-        );
-        if (why) {
-          record(
-            'stop',
-            why === 'form_leaves_site'
-              ? 'the form sends to another site or a payment / grant address'
-              : 'the form holds a supplied value and this browser cannot tell where it sends',
-          );
-          return finish('needs_owner', why, {
-            element: {
-              ref: offer.element.ref,
-              label: offer.element.label,
-              ...(offer.element.formAction ? { href: offer.element.formAction } : {}),
-            },
-          });
-        }
-      }
-      if (
-        offer.kind === 'click' &&
-        offer.element &&
-        linkNeedsOwner(offer.element, snapshot.url, input.allowedSites)
-      ) {
-        record('stop', 'link leaves the site or leads to a grant, payment or install page');
-        return finish('needs_owner', 'owner_must_decide', {
-          element: {
-            ref: offer.element.ref,
-            label: offer.element.label,
-            ...(offer.element.href ? { href: offer.element.href } : {}),
-          },
-        });
-      }
-      if (offer.element && signalNeedsOwner(offer.element, offer.kind)) {
-        record('stop', `typed owner signal: ${offer.element.ownerSignal ?? ''}`);
-        return finish('needs_owner', 'owner_must_decide', {
-          element: { ref: offer.element.ref, label: offer.element.label },
-        });
+      // Code guards: never left to the model (guards.ts actionGuard, the one per-action check).
+      const stop = actionGuard(offer, snapshot, {
+        home,
+        allowedSites,
+        backend: deps.target.backend,
+        holdsValue: lastTyped !== null || holdsCallerValue(snapshot, values),
+      });
+      if (stop) {
+        record('stop', stop.note);
+        return finish('needs_owner', stop.reason, stop.element ? { element: stop.element } : {});
       }
       const action = actionOf(offer, values);
       if (!action) {

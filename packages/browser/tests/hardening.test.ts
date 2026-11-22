@@ -24,7 +24,13 @@ import {
 } from '../src/chrome/launcher.js';
 import { DESCRIPTORS } from '../src/descriptors.js';
 import type { Decider } from '../src/engine/decider.js';
-import { formNeedsOwner, isSubmitControl, leftHome, privateHost } from '../src/engine/guards.js';
+import {
+  actionGuard,
+  formNeedsOwner,
+  isSubmitControl,
+  leftHome,
+  privateHost,
+} from '../src/engine/guards.js';
 import { maskValues, unmaskValues } from '../src/engine/offers.js';
 import { runTask } from '../src/engine/task.js';
 import { bridgeToSnapshot } from '../src/user/snapshot.js';
@@ -688,5 +694,131 @@ describe("H2 on the person's Chrome: the bridge snapshot", () => {
     expect(formNeedsOwner(snap.elements[0] as ReturnType<typeof el>, snap, [], false)).toBe(
       'form_leaves_site',
     );
+  });
+});
+
+describe('actionGuard: every per-action check in one call (a multi-action plan calls it for each action)', () => {
+  const at = { url: HOME, formActionsKnown: true };
+  const ctx = {
+    home: 'shop.example.com',
+    allowedSites: [],
+    backend: 'managed' as const,
+    holdsValue: true,
+  };
+  it('names the first rule an action breaks, or null', () => {
+    expect(
+      actionGuard({ kind: 'type', element: field('e1', { secret: true }) }, at, ctx)?.reason,
+    ).toBe('secret_field');
+    expect(
+      actionGuard({ kind: 'type', element: field('e1') }, { url: 'https://evil.example.net/' }, ctx)
+        ?.reason,
+    ).toBe('left_site');
+    expect(
+      actionGuard(
+        { kind: 'submit', element: field('e1', { formAction: 'https://evil.example.net/x' }) },
+        at,
+        ctx,
+      ),
+    ).toMatchObject({
+      reason: 'form_leaves_site',
+      element: { href: 'https://evil.example.net/x' },
+    });
+    expect(
+      actionGuard({ kind: 'click', element: el('e2', { label: 'Send' }) }, { url: HOME }, ctx)
+        ?.reason,
+    ).toBe('form_target_unknown');
+    expect(
+      actionGuard(
+        {
+          kind: 'click',
+          element: el('e3', { tag: 'a', role: 'link', href: 'https://evil.example.net/' }),
+        },
+        at,
+        ctx,
+      )?.reason,
+    ).toBe('owner_must_decide');
+    expect(
+      actionGuard({ kind: 'click', element: el('e4', { ownerSignal: 'AXCloseButton' }) }, at, ctx)
+        ?.reason,
+    ).toBe('owner_must_decide');
+    expect(actionGuard({ kind: 'type', element: field('e1') }, at, ctx)).toBeNull();
+    expect(actionGuard({ kind: 'scroll_down' }, at, ctx)).toBeNull();
+  });
+
+  it('an app window: no site or form check (no address, no web forms), owner signals and secrets still stop', () => {
+    const app = { url: 'app://com.apple.TextEdit/Untitled' };
+    const appCtx = { ...ctx, home: null, backend: 'app' as const };
+    expect(
+      actionGuard({ kind: 'submit', element: field('e1', { tag: 'AXTextField' }) }, app, appCtx),
+    ).toBeNull();
+    expect(
+      actionGuard({ kind: 'type', element: field('e1', { tag: 'AXTextField' }) }, app, appCtx),
+    ).toBeNull();
+    expect(
+      actionGuard(
+        { kind: 'click', element: el('e2', { ownerSignal: 'AXDefaultButton' }) },
+        app,
+        appCtx,
+      )?.reason,
+    ).toBe('owner_must_decide');
+    expect(
+      actionGuard(
+        { kind: 'type', element: field('e3', { tag: 'AXSecureTextField', secret: true }) },
+        app,
+        appCtx,
+      )?.reason,
+    ).toBe('secret_field');
+  });
+});
+
+describe('the app backend runs the same masking and stop threshold', () => {
+  class AppTarget extends FakeTarget {
+    override readonly backend = 'app' as const;
+  }
+  const app = (
+    title: string,
+    elements: ReturnType<typeof el>[],
+    text = 'window text',
+  ): ReturnType<typeof page> => ({
+    ...page(`app://com.apple.Notes/${title}`, elements, text),
+    formActionsKnown: undefined,
+  });
+  it('a caller value shown in the window is masked; a window whose title changes is not "another site"', async () => {
+    const target = new AppTarget([
+      app('Note', [field('e1', { tag: 'AXTextField', label: 'Search notes' })]),
+      app(
+        'Results for alpha-secret',
+        [field('e1', { tag: 'AXTextField', value: 'alpha-secret' })],
+        'Results for alpha-secret',
+      ),
+    ]);
+    const decider = new FakeDecider([
+      { choice: 'type e1 query' },
+      { choice: 'submit e1' },
+      { choice: 'done', goalMet: 0.95 },
+    ]);
+    const result = await run(target, decider, {
+      goal: 'search my notes',
+      values: { query: 'alpha-secret' },
+    });
+    expect(result.status).toBe('done');
+    expect(target.actions.map((action) => action.kind)).toEqual(['type', 'submit']);
+    expect(JSON.stringify(decider.judged)).not.toContain('alpha-secret');
+    expect(JSON.stringify(decider.judged)).toContain('⟨value query⟩');
+  });
+
+  it('need_value at 0.3 is re-decided on an app window too', async () => {
+    const target = new AppTarget([app('Note', [el('e1', { tag: 'AXButton' })])]);
+    const result = await run(
+      target,
+      new FakeDecider([
+        { choice: 'need_value', confidence: 0.3 },
+        { choice: 'click e1' },
+        { choice: 'done', goalMet: 0.95 },
+      ]),
+      { goal: 'press it' },
+    );
+    expect(result.status).toBe('done');
+    expect(target.actions).toEqual([{ kind: 'click', ref: 'e1' }]);
   });
 });

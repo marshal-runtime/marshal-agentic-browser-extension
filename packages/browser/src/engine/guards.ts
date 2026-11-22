@@ -19,7 +19,7 @@
  * Whether a BUTTON's own label grants, connects, pays or sends is judged by the model (the `ask_owner` action and the
  * `needs_owner` question), and stopped in code on its answer.
  */
-import type { Snapshot, SnapshotElement } from '../target.js';
+import type { BackendKind, Snapshot, SnapshotElement } from '../target.js';
 
 export const OWNER_SEGMENTS: ReadonlySet<string> = new Set([
   'oauth',
@@ -203,4 +203,88 @@ export function privateHost(host: string | null): boolean {
     return /^f[cd][0-9a-f]{2}:/.test(name) || /^fe[89ab][0-9a-f]:/.test(name);
   }
   return false;
+}
+
+/** What `actionGuard` needs besides the action and the page. */
+export interface GuardContext {
+  /** The task's home site (`leftHome`); null until the task has seen an http(s) page, and always on an app window. */
+  readonly home: string | null;
+  readonly allowedSites: readonly string[];
+  readonly backend: BackendKind;
+  /** A caller value was typed in this task, or a field on this page holds one (`formNeedsOwner`'s `holdsValue`). */
+  readonly holdsValue: boolean;
+}
+
+/** Why an action must be left to the owner: a `needs_owner` reason, a trace note and the element it concerns. */
+export interface GuardStop {
+  readonly reason:
+    | 'secret_field'
+    | 'left_site'
+    | 'form_leaves_site'
+    | 'form_target_unknown'
+    | 'owner_must_decide';
+  readonly note: string;
+  readonly element?: { readonly ref: string; readonly label: string; readonly href?: string };
+}
+
+/**
+ * Every per-action code guard, in one place: the step loop calls it for the action it is about to take, and a caller
+ * that plans several actions per decision must call it before EACH of them, against the page as it is then. Returns
+ * null when the action may be taken. An app window has no address and no web forms, so the site and form checks never
+ * fire there (its owner signals are typed by the backend).
+ */
+export function actionGuard(
+  action: { readonly kind: string; readonly element?: SnapshotElement },
+  snapshot: Pick<Snapshot, 'url' | 'formActionsKnown'>,
+  context: GuardContext,
+): GuardStop | null {
+  const element = action.element;
+  const named = element ? { ref: element.ref, label: element.label } : undefined;
+  if (element && isSecret(element))
+    return {
+      reason: 'secret_field',
+      note: 'a password, code or card field; the person types it themselves',
+      element: { ref: element.ref, label: element.label },
+    };
+  // Typing, choosing or sending happens only on the home site, whatever moved the tab off it (a script, a redirect).
+  if (
+    (action.kind === 'type' || action.kind === 'submit' || action.kind === 'select') &&
+    leftHome(context.home, snapshot.url, context.allowedSites)
+  )
+    return {
+      reason: 'left_site',
+      note: `the page is no longer on the task's site (${context.home ?? ''})`,
+      ...(named ? { element: named } : {}),
+    };
+  if (!element) return null;
+  const own = { ref: element.ref, label: element.label };
+  // A form is checked by where it sends, before Enter in one of its fields or a click on its submit button.
+  if (
+    context.backend !== 'app' &&
+    (action.kind === 'submit' || (action.kind === 'click' && isSubmitControl(element)))
+  ) {
+    const why = formNeedsOwner(element, snapshot, context.allowedSites, context.holdsValue);
+    if (why)
+      return {
+        reason: why,
+        note:
+          why === 'form_leaves_site'
+            ? 'the form sends to another site or a payment / grant address'
+            : 'the form holds a supplied value and this browser cannot tell where it sends',
+        element: { ...own, ...(element.formAction ? { href: element.formAction } : {}) },
+      };
+  }
+  if (action.kind === 'click' && linkNeedsOwner(element, snapshot.url, context.allowedSites))
+    return {
+      reason: 'owner_must_decide',
+      note: 'link leaves the site or leads to a grant, payment or install page',
+      element: { ...own, ...(element.href ? { href: element.href } : {}) },
+    };
+  if (signalNeedsOwner(element, action.kind))
+    return {
+      reason: 'owner_must_decide',
+      note: `typed owner signal: ${element.ownerSignal ?? ''}`,
+      element: own,
+    };
+  return null;
 }
