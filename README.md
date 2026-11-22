@@ -4,8 +4,7 @@ Agentic Browser provides browser automation through:
 
 - a standalone Chrome/Edge CLI;
 - an MV3 browser extension and MCP server; and
-- `@agentic-browser/marshal-runtime-extension`, which contributes 42
-  native-routable browser capabilities and Marshal panel catalog entries.
+- `@marshal/browser`, Marshal's browser extension (`packages/browser`).
 
 Operations cover navigation, DOM interaction, extraction, screenshots, tabs,
 storage, browser APIs, emulation, and remote CDP.
@@ -26,47 +25,19 @@ Playwright WebKit backend.
 
 ## Requirements
 
-- Node.js 22.13 or newer for the Marshal Runtime extension
+- Node.js 22.13 or newer
 - npm 10 or newer
 - Chrome or Edge
 - Chrome 120 or newer for the MV3 extension
 
-## Build and install in Marshal
+## Marshal
 
-For a Marshal Runtime source checkout, place the whole repository at:
-
-```text
-<marshal-agent-runtime>\extensions\<repository>
-```
-
-Build the nested Runtime extension:
-
-```powershell
-npm ci
-npm run build:runtime-extension
-```
-
-The Runtime's workspace discovery finds
-`packages\runtime-extension\runtime-extension.json` and the built
-`dist\runtime.cjs`. Open **Marshal > Plugins**, refresh the Runtime catalog,
-find `@agentic-browser/marshal-runtime-extension`, then explicitly **Install**
-and **Enable** it.
-
-Discovery only publishes a catalog candidate. It does not install, enable,
-activate, or execute code. Packaged Marshal installations use the extension
-location managed by the Plugins host.
-
-The host must also supply `@agentic-browser/runtime-host`, panel wiring, and a
-working native transport to the loaded MV3 extension. Installing the Runtime
-package alone does not establish that transport.
-
-To create an npm archive instead:
-
-```powershell
-npm pack .\packages\runtime-extension
-```
-
-The package's `prepack` script rebuilds it.
+Marshal's browser is `@marshal/browser` (`packages/browser`): a Chrome it starts, the person's own Chrome through the
+Marley bridge, and native macOS apps, with `browser.status`, `browser.session.*`, `browser.task`, `browser.ask`,
+`browser.watch` and session recording. See [its README](packages/browser/README.md). The earlier Marshal packages of
+this repository (`@agentic-browser/marshal-runtime-extension`, the `browser_*` capabilities, and
+`@agentic-browser/automation-extension`, `browser.automation.*` / `computer.automation.*`) were removed; their
+callers moved to `@marshal/browser`.
 
 ## Standalone workflow
 
@@ -133,16 +104,12 @@ installation.
   when persisted as disabled.
 - Local Marshal isolation supports one session; concurrent isolated sessions
   require an external remote-CDP service.
-- Eight MCP descriptors are intentionally omitted from Marshal because they
-  lack production native routing.
 - Bookmarks, history, downloads, and cookies have no user-facing optional
   permission grant flow.
 - `AGENTIC_BROWSER_LOG_LEVEL` and `AGENTIC_BROWSER_EXTENSION_ID` are parsed by
   MCP configuration but are not currently applied.
 
-Additional integration details are in
-[the Runtime extension README](packages/runtime-extension/README.md) and
-[the Runtime panel guide](docs/runtime-panel.md).
+Additional integration details are in [the Runtime panel guide](docs/runtime-panel.md).
 
 ## License
 

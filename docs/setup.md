@@ -109,42 +109,6 @@ context to an extension, so only one local Marshal browser session can be
 active at a time; a second session fails instead of sharing cookies or web
 storage.
 
-## Connect the Marshal Extension Manager
-
-Build this package and the Marshal runtime checkout, then materialize the packed
-`@agentic-browser/marshal-runtime-extension` package beneath a host-approved
-extension root:
-
-```bash
-npm run build:runtime-extension
-npm pack packages/runtime-extension
-```
-
-At manager construction, call
-`createMarshalBrowserExtensionLifecycle(...)` from
-`@agentic-browser/marshal-runtime-extension/host` with Marshal's actual
-`computeRuntimeExtensionIntegrity`, `LocalRuntimeExtensionPackageLoader`, and
-`RuntimeExtensionManager` exports. Supply the live kernel, activation context,
-durable state store, lifecycle coordinator, and panel controller. Call `start()`
-once during startup; it is safe if startup paths converge and call it
-concurrently. On shutdown, call `dispose()`.
-
-Register the adapter's three `panelTools.toolIds` in the host's tool registry and
-delegate each call to `panelTools.invoke(toolId, input, invocationContext)`.
-Forward the complete Marshal `InvocationContext`, including `executionId`; the
-adapter rejects unscoped panel calls.
-
-The state store is a small host-owned persistence port with `read()` and
-`write(state)` methods. Store the value in the same durable manager transaction
-used for enabled extensions. Do not recompute integrity during restore: the
-adapter deliberately loads with the previously persisted digest so changed
-package contents fail closed.
-
-The public Marshal runtime currently does not own a persisted extension registry
-or a generic host-tool registration API. Those two calls remain explicit host
-wiring; package loading, activation, restart verification, duplicate suppression,
-bridge injection, and panel context adaptation are implemented here.
-
 ## Project Layout
 
 The project uses npm workspaces with three packages:
