@@ -1,6 +1,6 @@
 {
   "name": "@marshal/browser",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "One browser layer for agents: a Chrome it starts (agent / visitor / offline profiles), a step engine that asks marshal.models.decide one question set per step with a marked screenshot, and browser.task / ask / session.* capabilities.",
   "private": true,
   "type": "commonjs",

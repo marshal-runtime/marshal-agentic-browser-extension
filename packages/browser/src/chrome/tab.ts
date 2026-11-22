@@ -42,6 +42,7 @@ import type {
   LogKind,
   Modifier,
   PageDialog,
+  PanelInput,
   PressKey,
   Viewport,
 } from '../target.js';
@@ -808,6 +809,84 @@ export class ManagedTab implements Target {
   async fullText(): Promise<string> {
     const text = await this.evaluate(FULL_TEXT_SCRIPT);
     return typeof text === 'string' ? text : '';
+  }
+
+  /** Address and title for the live panel's bar; one small evaluate, refused (thrown) while a dialog is open. */
+  async location(): Promise<{ url: string; title: string }> {
+    const value = (await this.evaluate(
+      'return [String(location.href), String(document.title)];',
+    )) as [string, string] | undefined;
+    return {
+      url: String(value?.[0] ?? '').slice(0, 2_000),
+      title: String(value?.[1] ?? '').slice(0, 300),
+    };
+  }
+
+  /**
+   * A person's input from the live panel, in page CSS pixels (src/watch/watches.ts maps and rate-limits it, and
+   * refuses it while a task drives the tab). Real Input events, like browser.session.act. Text and keys never reach a
+   * focused password, code or card field: the same FOCUSED_SECRET_SCRIPT check the session's press uses.
+   */
+  async panelInput(input: PanelInput): Promise<ActOutcome> {
+    if (this.dialog)
+      return { ok: false, error: new DialogOpen(this.dialog).message, dialog: this.dialog };
+    try {
+      const raced = await this.raceDialog(() => this.performPanelInput(input));
+      return 'dialog' in raced ? { ok: true, dialog: raced.dialog } : raced.value;
+    } catch (error) {
+      if (error instanceof DialogOpen)
+        return { ok: false, error: error.message, dialog: error.dialog };
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private async performPanelInput(input: PanelInput): Promise<ActOutcome> {
+    switch (input.kind) {
+      case 'click': {
+        const at = { x: input.x, y: input.y };
+        return this.settleAfter(async () => {
+          await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
+          for (let count = 1; count <= input.clickCount; count += 1) {
+            await this.send('Input.dispatchMouseEvent', {
+              type: 'mousePressed',
+              ...at,
+              button: 'left',
+              buttons: 1,
+              clickCount: count,
+            });
+            await this.send('Input.dispatchMouseEvent', {
+              type: 'mouseReleased',
+              ...at,
+              button: 'left',
+              buttons: 0,
+              clickCount: count,
+            });
+          }
+        });
+      }
+      case 'wheel':
+        await this.send('Input.dispatchMouseEvent', {
+          type: 'mouseWheel',
+          x: input.x,
+          y: input.y,
+          deltaX: input.deltaX,
+          deltaY: input.deltaY,
+        });
+        return { ok: true };
+      case 'key':
+        return this.press(input.key, input.modifiers);
+      case 'text':
+        if ((await this.evaluate(FOCUSED_SECRET_SCRIPT)) === true)
+          return {
+            ok: false,
+            error:
+              'secret-field: a password, code or card field has focus; the person types it themselves',
+          };
+        await this.send('Input.insertText', { text: input.text });
+        return { ok: true };
+      default:
+        return { ok: false, error: 'unknown-action' };
+    }
   }
 
   /** Live JPEG frames over the same CDP pipe; Chrome screencasts only while at least one handle is open. */

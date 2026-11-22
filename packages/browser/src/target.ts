@@ -204,16 +204,40 @@ export interface Shot {
 
 export interface ScreencastOptions {
   readonly maxWidth: number;
+  /** Frames fit inside maxWidth x maxHeight (aspect kept); unset: width only. */
+  readonly maxHeight?: number;
+  /** JPEG quality 0-100 (default 70). */
+  readonly quality?: number;
   readonly everyNthFrame?: number;
 }
 export interface ScreencastFrameMeta {
   readonly ts: number;
+  /** The frame's own pixel size. */
   readonly width: number;
   readonly height: number;
+  /** The page's viewport in CSS pixels, when the backend knows it (to map a point on the frame to the page). */
+  readonly pageWidth?: number;
+  readonly pageHeight?: number;
 }
 export interface ScreencastHandle {
   stop(): Promise<void>;
 }
+
+/**
+ * Input from a person in the live panel, already in page CSS pixels (src/watch/watches.ts maps the panel's point).
+ * Text is printable characters only; a named key goes through `key`. Both are refused while a secret field has focus.
+ */
+export type PanelInput =
+  | { readonly kind: 'click'; readonly x: number; readonly y: number; readonly clickCount: 1 | 2 }
+  | {
+      readonly kind: 'wheel';
+      readonly x: number;
+      readonly y: number;
+      readonly deltaX: number;
+      readonly deltaY: number;
+    }
+  | { readonly kind: 'key'; readonly key: PressKey; readonly modifiers: readonly Modifier[] }
+  | { readonly kind: 'text'; readonly text: string };
 
 export interface Target {
   readonly backend: BackendKind;
@@ -246,4 +270,8 @@ export interface Target {
   answerDialog?(accept: boolean, promptText?: string): Promise<void>;
   /** Sets the page's device size (CSS width/height, pixel ratio, mobile layout, touch). */
   setViewport?(viewport: Viewport): Promise<void>;
+  /** The page's address and title, read cheaply (the live panel's address bar). */
+  location?(): Promise<{ url: string; title: string }>;
+  /** Input from a person watching in the live panel (managed only; see PanelInput). */
+  panelInput?(input: PanelInput): Promise<ActOutcome>;
 }

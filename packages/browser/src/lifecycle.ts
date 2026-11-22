@@ -1,6 +1,6 @@
 /**
  * The task lifecycle, live view and recording capabilities (browser.task.get / list / cancel, browser.watch,
- * browser.watch.frame, browser.watch.close, browser.session.record.start / stop), kept out of capabilities.ts so the
+ * browser.watch.frame, browser.watch.input, browser.watch.close, browser.session.record.start / stop), kept out of capabilities.ts so the
  * service only routes to them. BrowserService.task registers each run here (TaskRegistry) and wraps it with a
  * recording when `want.video` is set.
  */
@@ -28,6 +28,7 @@ export const LIFECYCLE_CAPABILITIES = [
   'browser.task.cancel',
   'browser.watch',
   'browser.watch.frame',
+  'browser.watch.input',
   'browser.watch.close',
   'browser.session.record.start',
   'browser.session.record.stop',
@@ -81,8 +82,10 @@ export class Lifecycle {
         const id =
           typeof args['watchId'] === 'string' && args['watchId'] ? args['watchId'] : undefined;
         const since = typeof args['since'] === 'number' ? args['since'] : undefined;
-        return this.watches.poll(id, since);
+        return this.watches.poll(id, since, viewArg(args['view']));
       }
+      case 'browser.watch.input':
+        return this.watches.input(stringArg(args, 'watchId'), args['event']);
       case 'browser.watch.close':
         return { ok: true, closed: await this.watches.close(stringArg(args, 'watchId')) };
       case 'browser.session.record.start':
@@ -297,6 +300,15 @@ export class Lifecycle {
 
 export function defaultArtifactRoot(artifactDir?: string): string {
   return artifactDir ?? path.join(os.tmpdir(), 'marshal-browser', 'artifacts');
+}
+
+/** The panel's picture size in device pixels, or undefined when absent or not a sane size. */
+function viewArg(value: unknown): { width: number; height: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { width, height } = value as Record<string, unknown>;
+  const sane = (side: unknown): side is number =>
+    typeof side === 'number' && Number.isFinite(side) && side >= 1 && side <= 10_000;
+  return sane(width) && sane(height) ? { width, height } : undefined;
 }
 
 function stringArg(args: Record<string, unknown>, key: string): string {

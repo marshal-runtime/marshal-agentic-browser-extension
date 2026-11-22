@@ -1,8 +1,10 @@
 /**
  * Live JPEG frames of one tab through Chrome's own screencast (`Page.startScreencast`) over the CDP connection the
  * tab already holds. Chrome runs one screencast per target, so a `ScreencastHub` multiplexes every consumer of a tab
- * (the watch panel, a recorder) onto one: it starts on the first consumer, restarts when a consumer asks for wider
- * frames, and stops (and drops its event listener) when the last consumer stops. Nothing runs while nobody consumes.
+ * (the watch panel, a recorder) onto one: it starts on the first consumer, restarts when a consumer asks for wider,
+ * taller or better frames (it never shrinks a running screencast another consumer holds), and stops (and drops its
+ * event listener) when the last consumer stops. Nothing runs while nobody consumes. Chrome never upscales a frame: a
+ * request larger than the page gets the page's own pixels.
  */
 import type { CdpEvent } from './cdp.js';
 import type { ScreencastFrameMeta, ScreencastHandle, ScreencastOptions } from '../target.js';
@@ -23,6 +25,9 @@ type FrameListener = (jpegBase64: string, meta: ScreencastFrameMeta) => void;
 
 interface Consumer {
   readonly maxWidth: number;
+  /** Infinity: no height limit. */
+  readonly maxHeight: number;
+  readonly quality: number;
   readonly everyNthFrame: number;
   readonly onFrame: FrameListener;
 }
@@ -30,13 +35,15 @@ interface Consumer {
 const QUALITY = 70;
 const MIN_WIDTH = 160;
 const MAX_WIDTH = 1920;
+const MIN_HEIGHT = 120;
+const MAX_HEIGHT = 1920;
 const CALL_TIMEOUT_MS = 5_000;
 
 export class ScreencastHub {
   private readonly consumers = new Set<Consumer>();
   private off: (() => void) | null = null;
-  /** Width and frame step of the screencast Chrome is running now, or null. */
-  private running: { maxWidth: number; everyNthFrame: number } | null = null;
+  /** Size, quality and frame step of the screencast Chrome is running now, or null. */
+  private running: Settings | null = null;
   /** Serializes start/restart/stop so two consumers never race Chrome's single screencast. */
   private chain: Promise<void> = Promise.resolve();
 
@@ -58,6 +65,11 @@ export class ScreencastHub {
     if (this.channel.closed) throw new Error('BROWSER_SCREENCAST_FAILED: the tab is closed');
     const consumer: Consumer = {
       maxWidth: clampWidth(options.maxWidth),
+      maxHeight:
+        options.maxHeight === undefined
+          ? Number.POSITIVE_INFINITY
+          : clamp(options.maxHeight, MIN_HEIGHT, MAX_HEIGHT, 800),
+      quality: options.quality === undefined ? QUALITY : clamp(options.quality, 10, 100, QUALITY),
       everyNthFrame: Math.max(1, Math.floor(options.everyNthFrame ?? 1)),
       onFrame,
     };
@@ -98,15 +110,23 @@ export class ScreencastHub {
       await this.stopChrome();
       return;
     }
+    // The widest, tallest, best and most frequent any consumer asked for. A screencast that already gives at least
+    // that keeps running (a consumer leaving never restarts it).
     let maxWidth = 0;
+    let maxHeight = 0;
+    let quality = 0;
     let everyNthFrame = Number.POSITIVE_INFINITY;
     for (const consumer of this.consumers) {
       maxWidth = Math.max(maxWidth, consumer.maxWidth);
+      maxHeight = Math.max(maxHeight, consumer.maxHeight);
+      quality = Math.max(quality, consumer.quality);
       everyNthFrame = Math.min(everyNthFrame, consumer.everyNthFrame);
     }
     if (
       this.running &&
       this.running.maxWidth >= maxWidth &&
+      this.running.maxHeight >= maxHeight &&
+      this.running.quality >= quality &&
       this.running.everyNthFrame <= everyNthFrame
     )
       return;
@@ -118,7 +138,13 @@ export class ScreencastHub {
     try {
       await this.channel.send(
         'Page.startScreencast',
-        { format: 'jpeg', quality: QUALITY, maxWidth, everyNthFrame },
+        {
+          format: 'jpeg',
+          quality,
+          maxWidth,
+          ...(Number.isFinite(maxHeight) ? { maxHeight } : {}),
+          everyNthFrame,
+        },
         this.sessionId,
         CALL_TIMEOUT_MS,
       );
@@ -128,7 +154,7 @@ export class ScreencastHub {
         `BROWSER_SCREENCAST_FAILED: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    this.running = { maxWidth, everyNthFrame };
+    this.running = { maxWidth, maxHeight, quality, everyNthFrame };
   }
 
   private async stopChrome(): Promise<void> {
@@ -169,13 +195,16 @@ export class ScreencastHub {
       deviceWidth?: number;
       deviceHeight?: number;
     };
+    const pageWidth = Math.round(metadata.deviceWidth ?? 0);
+    const pageHeight = Math.round(metadata.deviceHeight ?? 0);
     // The frame's own pixel size (scaled to maxWidth), read from the JPEG header; the page's size if unreadable.
     const size = jpegSize(data);
     const meta: ScreencastFrameMeta = {
       ts:
         typeof metadata.timestamp === 'number' ? Math.round(metadata.timestamp * 1000) : Date.now(),
-      width: size?.width ?? Math.round(metadata.deviceWidth ?? 0),
-      height: size?.height ?? Math.round(metadata.deviceHeight ?? 0),
+      width: size?.width ?? pageWidth,
+      height: size?.height ?? pageHeight,
+      ...(pageWidth > 0 && pageHeight > 0 ? { pageWidth, pageHeight } : {}),
     };
     for (const consumer of [...this.consumers]) {
       try {
@@ -205,7 +234,18 @@ export function jpegSize(base64: string): { width: number; height: number } | nu
   return null;
 }
 
+interface Settings {
+  maxWidth: number;
+  maxHeight: number;
+  quality: number;
+  everyNthFrame: number;
+}
+
+function clamp(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 function clampWidth(width: number): number {
-  if (!Number.isFinite(width)) return 800;
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(width)));
+  return clamp(width, MIN_WIDTH, MAX_WIDTH, 800);
 }

@@ -85,6 +85,11 @@ export class UserTab implements Target {
     this.bridge = bridge;
   }
 
+  /** The live panel's address bar: what the newest snapshot saw (no extra bridge call into the person's Chrome). */
+  location(): Promise<{ url: string; title: string }> {
+    return Promise.resolve({ url: this.last?.url ?? '', title: this.last?.title ?? '' });
+  }
+
   async snapshot(): Promise<Snapshot> {
     const raw = await this.call<BridgeSnapshot>('browserbridge.snapshot', {
       tabId: this.tabId,

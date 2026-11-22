@@ -24,7 +24,7 @@ import { speedSettings, type SpeedConfiguration } from './engine/speed-settings.
 import { DESCRIPTORS } from './descriptors.js';
 import { defaultArtifactRoot, Lifecycle } from './lifecycle.js';
 import { RecorderUnavailable, type Recording, type VideoResult } from './record/recorder.js';
-import { ABORTED, untilAborted, type TaskEntry } from './tasks.js';
+import { ABORTED, keepEndPicture, untilAborted, type TaskEntry } from './tasks.js';
 import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
 import type { BridgeClient } from './user/bridge.js';
 import { triageGoal, type Triage } from './engine/triage.js';
@@ -109,7 +109,7 @@ export class BrowserService {
   provider(): CapabilityProvider {
     return {
       id: '@marshal/browser',
-      version: '0.2.0',
+      version: '0.2.1',
       list: () => DESCRIPTORS,
       get: (name) => DESCRIPTORS.find((descriptor) => descriptor.name === name),
       invoke: (name, input, context) => this.invoke(name, input, context),
@@ -588,8 +588,9 @@ export class BrowserService {
             task.lastStep = step;
             task.steps = Math.max(task.steps, step.step);
           },
-          onPhase: (phase) => {
+          onPhase: (phase, say) => {
             task.phase = phase;
+            task.doing = say ?? null;
           },
         },
         {
@@ -640,6 +641,7 @@ export class BrowserService {
       if (recording) await this.lifecycle.abortVideo(recording);
       if (session) {
         session.lastUsed = Date.now();
+        await keepEndPicture(task, session.tab);
         if (!existing && (!keepOpen || signal.aborted)) {
           this.sessions.delete(session.id);
           await session.tab.close();

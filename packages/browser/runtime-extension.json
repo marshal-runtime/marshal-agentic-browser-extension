@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "identity": "@marshal/browser",
   "displayName": "Browser",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "entrypoint": "dist/runtime.cjs",
   "moduleFormat": "commonjs-bundle-v1",
   "configuration": {
@@ -114,6 +114,7 @@
       "browser.task.cancel",
       "browser.watch",
       "browser.watch.frame",
+      "browser.watch.input",
       "browser.watch.close",
       "browser.session.record.start",
       "browser.session.record.stop"

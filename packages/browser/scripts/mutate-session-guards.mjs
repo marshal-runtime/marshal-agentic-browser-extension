@@ -385,6 +385,193 @@ MUTATIONS.push({
   tests: ['tests/pack-org.test.ts'],
 });
 
+// The live panel (browser.watch.input and frame sizing).
+const PANEL = 'tests/watch-panel.test.ts';
+const PANEL_REAL = 'tests/watch-input.real.test.ts';
+MUTATIONS.push(
+  {
+    name: 'panel: a task watch takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (source.kind === 'task') return 'task';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: a session a task drives takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (source.task?.()) return 'task';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: "panel: the person's own Chrome takes input",
+    file: 'src/watch/watches.ts',
+    from: "if (target.backend === 'user') return 'user';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: an app takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (target.backend === 'app') return 'app';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no rate limit',
+    file: 'src/watch/watches.ts',
+    from: 'if (watch.inputs.length >= INPUT_RATE)',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: control characters as text',
+    file: 'src/watch/watches.ts',
+    from: 'if (/\\p{Cc}/u.test(text))',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: any key name',
+    file: 'src/watch/watches.ts',
+    from: "if (typeof key !== 'string' || !(PRESS_KEYS as readonly string[]).includes(key))\n        return `key must be",
+    to: "if (typeof key !== 'string')\n        return `key must be",
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: any modifier',
+    file: 'src/watch/watches.ts',
+    from: '!modifiers.every((modifier) => (MODIFIERS as readonly unknown[]).includes(modifier))',
+    to: 'false',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: managed text into a secret field',
+    file: 'src/chrome/tab.ts',
+    from: '        if ((await this.evaluate(FOCUSED_SECRET_SCRIPT)) === true)',
+    to: '        if (false as boolean)',
+    tests: [PANEL_REAL],
+  },
+  {
+    name: 'panel: a click on the letterbox maps to the page',
+    file: 'src/watch/geometry.ts',
+    from: 'if (!(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1)) return null;',
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no frame byte bound',
+    file: 'src/watch/watches.ts',
+    from: 'if (bytes > FRAME_MAX_BYTES && watch.quality > QUALITY.min)',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no maximum frame width',
+    file: 'src/watch/geometry.ts',
+    from: 'clamp(view.width, STREAM_LIMITS.minWidth, STREAM_LIMITS.maxWidth)',
+    to: 'clamp(view.width, STREAM_LIMITS.minWidth, Infinity)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no wheel clamp',
+    file: 'src/watch/watches.ts',
+    from: 'Math.max(-WHEEL_MAX, Math.min(WHEEL_MAX, Math.round(value)))',
+    to: 'Math.round(value)',
+    tests: [PANEL],
+  },
+);
+
+// A finished task's last picture, and the plain step words (T3).
+const FINAL = 'tests/watch-final.test.ts';
+const WORDS = 'tests/task-words.test.ts';
+MUTATIONS.push(
+  {
+    name: 'final: live frames not kept on the task',
+    file: 'src/watch/watches.ts',
+    from: "if (watch.source.kind === 'task' && bytes <= KEPT_FRAME_MAX_BYTES)",
+    to: 'if (false as boolean)',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no bound on a kept live frame',
+    file: 'src/watch/watches.ts',
+    from: "if (watch.source.kind === 'task' && bytes <= KEPT_FRAME_MAX_BYTES)",
+    to: "if (watch.source.kind === 'task')",
+    tests: [FINAL],
+  },
+  {
+    name: 'final: a running task marked final',
+    file: 'src/watch/watches.ts',
+    from: "...(entry.state === 'finished' ? { final: true } : {}),",
+    to: '...{ final: true },',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: the live watch keeps the marked last frame after the end',
+    file: 'src/watch/watches.ts',
+    from: '      kept.at > watch.frame.receivedAt;',
+    to: '      false;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no size bound on the screenshot file',
+    file: 'src/watch/watches.ts',
+    from: 'info.size > FINAL_MAX_BYTES',
+    to: 'false',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: a failed end capture drops the live frame',
+    file: 'src/tasks.ts',
+    from: '    if (!shot) return;',
+    to: '    entry.lastFrame = null;\n    if (!shot) return;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no bound on the end picture',
+    file: 'src/tasks.ts',
+    from: 'bytes > KEPT_FRAME_MAX_BYTES) return;',
+    to: 'false) return;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: end picture capture not time-bounded',
+    file: 'src/tasks.ts',
+    from: '          resolve(null);\n        }, END_SHOT_WAIT_MS);',
+    to: '        }, 2e9);',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no end picture before the tab closes',
+    file: 'src/capabilities.ts',
+    from: '        await keepEndPicture(task, session.tab);',
+    to: '',
+    tests: [PANEL_REAL],
+  },
+  {
+    name: 'words: doing ignores the phase',
+    file: 'src/tasks.ts',
+    from: "(entry.phase === 'acting' && entry.doing) ||",
+    to: 'entry.doing ||',
+    tests: [WORDS],
+  },
+  {
+    name: 'words: the engine action instead of the element',
+    file: 'src/engine/say.ts',
+    from: '      return `Clicking ${name}`;',
+    to: '      return `Clicking ${offer.action}`;',
+    tests: [WORDS],
+  },
+  {
+    name: 'words: the panel shows the raw step',
+    file: 'src/watch/app.ts',
+    from: "return state.doing || (s && s.say) || 'Starting';",
+    to: "return (s && s.action) || state.doing || 'Starting';",
+    tests: [WORDS],
+  },
+);
+
 const only = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : undefined;
