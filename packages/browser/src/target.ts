@@ -90,6 +90,19 @@ export interface Shot {
   readonly mimeType: 'image/png' | 'image/jpeg';
 }
 
+export interface ScreencastOptions {
+  readonly maxWidth: number;
+  readonly everyNthFrame?: number;
+}
+export interface ScreencastFrameMeta {
+  readonly ts: number;
+  readonly width: number;
+  readonly height: number;
+}
+export interface ScreencastHandle {
+  stop(): Promise<void>;
+}
+
 export interface Target {
   readonly backend: BackendKind;
   readonly description: string;
@@ -99,4 +112,8 @@ export interface Target {
   /** All visible text, capped by the backend. */
   fullText(): Promise<string>;
   close(): Promise<void>;
+  screencast?(
+    opts: ScreencastOptions,
+    onFrame: (jpegBase64: string, meta: ScreencastFrameMeta) => void,
+  ): Promise<ScreencastHandle>;
 }
