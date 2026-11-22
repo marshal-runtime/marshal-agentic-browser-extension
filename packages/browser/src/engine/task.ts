@@ -334,6 +334,13 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
   const notes: PageNote[] = [];
   const noted = new Set<string>();
   let noting: Promise<PageNote | null> | null = null;
+  /**
+   * The loop guard: each move from one page to another (URL without its fragment) with the number of notes kept when it
+   * was first made. The same move again with no new note since is a loop (Orders -> Analytics -> Orders -> Analytics),
+   * and the task stops as `blocked` / `page_loop` instead of spending its budget.
+   */
+  const moves = new Map<string, number>();
+  let lastPage: string | null = null;
   const settleNotes = async (): Promise<void> => {
     const pending = noting;
     if (!pending) return;
@@ -605,6 +612,29 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       const decided = snapshot;
       // A note started on the previous page is part of this look: the early extract, the goal check and the state.
       await settleNotes();
+      const here = withoutFragment(decided.url);
+      if (lastPage !== null && here !== lastPage) {
+        const move = `${lastPage}\n${here}`;
+        const before = moves.get(move);
+        if (before !== undefined && before === notes.length) {
+          pushTrace({
+            step: acted + 1,
+            action: 'loop',
+            say: SAY.loop,
+            rung: 0,
+            ms: 0,
+            url: decided.url,
+            outcome: 'stop',
+            note: `moved from ${clip(lastPage, 80)} to ${clip(here, 80)} again with nothing new read`,
+          });
+          return finish(
+            'blocked',
+            `page_loop: back and forth between ${clip(lastPage, 80)} and ${clip(here, 80)} without new facts`,
+          );
+        }
+        moves.set(move, notes.length);
+      }
+      lastPage = here;
       // The extract starts beside the decision when this look is likely the last: the triage said the start page answers
       // the goal (first decision), or the previous decision expected the goal met after its plan.
       if (
@@ -1140,6 +1170,11 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       extractRequest(input.goal, input.want?.data ?? {}, snapshot, text, images, values, notes),
     );
   }
+}
+
+function withoutFragment(url: string): string {
+  const hash = url.indexOf('#');
+  return hash === -1 ? url : url.slice(0, hash);
 }
 
 function probability(answer: DecideAnswer | undefined, fallback = 0): number {

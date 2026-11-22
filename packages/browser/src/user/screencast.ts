@@ -13,7 +13,7 @@ import type {
   ScreencastOptions,
 } from '../target.js';
 import { bridgeErrorOf, type BridgeClient } from './bridge.js';
-import { decodePng, encodeJpeg, scaleTo } from './image.js';
+import { decodePng, encodeJpeg, jpegSize, scaleTo } from './image.js';
 
 export type { ScreencastFrameMeta, ScreencastOptions };
 
@@ -25,7 +25,7 @@ export interface ScreencastHandle extends TargetScreencastHandle {
 export interface ScreencastDeps {
   readonly bridge: BridgeClient;
   readonly tabId: number;
-  readonly capture: () => Promise<{ png: Buffer; cssWidth: number }>;
+  readonly capture: () => Promise<{ image: Buffer; format: 'png' | 'jpeg'; cssWidth: number }>;
   readonly sleep: (ms: number) => Promise<void>;
   readonly now: () => number;
   readonly isClosed: () => boolean;
@@ -99,8 +99,15 @@ function poll(
     deps,
     async () => {
       const began = deps.now();
-      const { png } = await deps.capture();
-      const image = scaleTo(decodePng(png), maxWidth);
+      const shot = await deps.capture();
+      // A JPEG frame (a very large page) goes as it is, unscaled; its size comes from its own header.
+      const size = shot.format === 'jpeg' ? jpegSize(shot.image) : null;
+      if (shot.format === 'jpeg') {
+        if (size) onFrame(shot.image.toString('base64'), { ts: deps.now(), ...size });
+        await deps.sleep(Math.max(0, interval - (deps.now() - began)));
+        return;
+      }
+      const image = scaleTo(decodePng(shot.image), maxWidth);
       onFrame(encodeJpeg(image, POLL_QUALITY).toString('base64'), {
         ts: deps.now(),
         width: image.width,

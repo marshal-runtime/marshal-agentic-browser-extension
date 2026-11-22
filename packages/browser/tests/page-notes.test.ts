@@ -239,3 +239,65 @@ describe('page notes: a goal whose facts sit on two pages', () => {
     expect(result.stats.unusedCalls).toBe(1);
   });
 });
+
+describe('loop guard: the same move between two pages again with nothing new read', () => {
+  const back = (): FakeTarget =>
+    new FakeTarget([
+      page(ORDERS, [el('e1')], 'Orders today\n17'),
+      page(ANALYTICS, [el('e2')], 'Top product\nRed Mug'),
+      page(ORDERS, [el('e1')], 'Orders today\n17'),
+      page(ANALYTICS, [el('e2')], 'Top product\nRed Mug'),
+      page(ORDERS, [el('e1')], 'Orders today\n17'),
+    ]);
+
+  it('stops as blocked / page_loop at the repeated move instead of running to step_limit', async () => {
+    const decider = new FakeDecider([
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e2', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e2', goalMet: 0.2 },
+    ]);
+    const result = await run(back(), decider);
+    expect(result.status).toBe('blocked');
+    expect(result.reason).toMatch(/^page_loop: back and forth between .*orders and .*analytics/);
+    // Orders, Analytics, Orders decided; the second arrival at Analytics stops before its decision.
+    expect(decider.judged).toHaveLength(3);
+    expect(result.trace.at(-1)).toMatchObject({ action: 'loop', outcome: 'stop' });
+  });
+
+  it('a new fact read since the first move is progress: no stop', async () => {
+    const decider = new FakeDecider([
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e2', goalMet: 0.2, pagePart: 0.9 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'done', goalMet: 0.95 },
+    ]);
+    decider.noteAnswer = { facts: 'Top product: Red Mug' };
+    const result = await run(back(), decider);
+    expect(result.status).toBe('done');
+  });
+
+  it('a fragment change is not a move, and list -> item -> list -> another item is no loop', async () => {
+    const LIST = 'https://shop.example.com/products';
+    const target = new FakeTarget([
+      page(LIST, [el('e1')], 'list'),
+      page(`${LIST}#reviews`, [el('e1')], 'list'),
+      page(LIST, [el('e1')], 'list'),
+      page(`${LIST}#reviews`, [el('e1')], 'list'),
+      page(`${LIST}/1`, [el('e1')], 'item 1'),
+      page(LIST, [el('e1')], 'list'),
+      page(`${LIST}/2`, [el('e1')], 'item 2'),
+    ]);
+    const decider = new FakeDecider([
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'click e1', goalMet: 0.2 },
+      { choice: 'done', goalMet: 0.95 },
+    ]);
+    const result = await run(target, decider);
+    expect(result.status).toBe('done');
+  });
+});

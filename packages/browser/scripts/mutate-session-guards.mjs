@@ -996,8 +996,8 @@ MUTATIONS.push(
   {
     name: 'page notes: a page noted again on every visit',
     file: 'src/engine/task.ts',
-    from: '        !noted.has(page) &&',
-    to: '',
+    from: '&& !noted.has(page) &&',
+    to: '&&',
     tests: [NOTES],
   },
   {
@@ -1055,6 +1055,60 @@ MUTATIONS.push(
     from: '              return null;\n            },\n          );\n        noting = reading;',
     to: '              throw error;\n            },\n          );\n        noting = reading;',
     tests: [NOTES],
+  },
+);
+
+// The loop guard and the JPEG picture of the person's Chrome (the same findings, coordinator's follow-up).
+const NOTES_REAL = 'tests/page-notes.real.test.ts';
+MUTATIONS.push(
+  {
+    name: 'loop guard: removed',
+    file: 'src/engine/task.ts',
+    from: 'if (before !== undefined && before === notes.length) {',
+    to: 'if (false) {',
+    tests: [NOTES, NOTES_REAL],
+  },
+  {
+    name: 'loop guard: a new note is not progress',
+    file: 'src/engine/task.ts',
+    from: 'if (before !== undefined && before === notes.length) {',
+    to: 'if (before !== undefined) {',
+    tests: [NOTES],
+  },
+  {
+    name: 'loop guard: a fragment change counts as a move',
+    file: 'src/engine/task.ts',
+    from: 'const here = withoutFragment(decided.url);',
+    to: 'const here = decided.url;',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes (real Chrome): state omits the notes',
+    file: 'src/engine/task.ts',
+    from: 'state: promptOf(input.goal, decided, values, history, notes),',
+    to: 'state: promptOf(input.goal, decided, values, history),',
+    tests: [NOTES_REAL],
+  },
+  {
+    name: 'user jpeg: screenshot decodes a JPEG as PNG',
+    file: 'src/user/tab.ts',
+    from: "if (captured === 'jpeg') return { data: png.toString('base64'), mimeType: 'image/jpeg' };",
+    to: '',
+    tests: [EMBED],
+  },
+  {
+    name: 'user jpeg: format taken without checking the bytes',
+    file: 'src/user/tab.ts',
+    from: "if (!format) throw new BridgeError('failed', 'screenshot is neither a PNG nor a JPEG');",
+    to: '',
+    tests: [EMBED],
+  },
+  {
+    name: 'user jpeg: screencast decodes a JPEG frame as PNG',
+    file: 'src/user/screencast.ts',
+    from: "      if (shot.format === 'jpeg') {",
+    to: '      if (false) {',
+    tests: [EMBED],
   },
 );
 

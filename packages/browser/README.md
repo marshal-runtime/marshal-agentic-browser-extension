@@ -162,6 +162,9 @@ Fewer and overlapping calls (`src/engine/plan.ts`, `values.ts`, `speculate.ts`, 
   already had; at most 6 pages, each once), and later decisions, the goal check and the final extract see these notes;
   value pointers give way to the extract once a note exists. Without notes a goal split over two pages looped between
   them until `step_limit`. `pageNotes` (default true).
+- **Loop guard.** The same move between two pages (URL without its fragment) made again with no new note since stops
+  the task as `blocked` with reason `page_loop: back and forth between <A> and <B> without new facts`, instead of
+  spending the step budget.
 - **Parallel awaits.** `on: "auto"` starts the managed Chrome process while the routing question is asked (no tab before
   the route is known); that routing question and the start-page triage are one request; `browser.ask` reads the
   snapshot, screenshot and text together; step screenshots are saved beside the decision. Two actions never run at once.
@@ -335,6 +338,8 @@ await activation.dispose();
 - **The person's Chrome.** `bridge(context)` returns a client answering the carried bridge's verbs
   (`browserbridge.status`, `.tabs.list|open|navigate|focus|close`, `.snapshot`, `.screenshot`, `.click`, `.type`, `.key`,
   `.scroll`, `.wait`) in the same shapes; a screenshot may return `{data: <base64 PNG>, width}` instead of a file path.
+  The picture's format is read from its bytes: a JPEG (the Marley extension sends one for a page whose PNG is too
+  large) is passed on as `image/jpeg` without marks or scaling; anything other than PNG or JPEG is refused as `failed`.
   It refuses with `new mb.BridgeError(code, message, hostCode)`:
   - `not_connected`: the Chrome is gone; a task stops with `needs_owner` / `user_browser_not_connected` and the setup;
   - `needs_owner`: the host wants the person's approval first (a per-site card); a task or a session act stops with

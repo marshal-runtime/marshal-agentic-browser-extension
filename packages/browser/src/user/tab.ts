@@ -29,7 +29,15 @@ import {
   type BridgeSnapshot,
   type BridgeTab,
 } from './bridge.js';
-import { decodePng, drawMarks, encodeJpeg, encodePng, scaleTo, type Mark } from './image.js';
+import {
+  decodePng,
+  drawMarks,
+  encodeJpeg,
+  encodePng,
+  imageFormat,
+  scaleTo,
+  type Mark,
+} from './image.js';
 import { startScreencast } from './screencast.js';
 import { bridgeToSnapshot } from './snapshot.js';
 
@@ -246,7 +254,10 @@ export class UserTab implements Target {
   }
 
   async screenshot(options: ScreenshotOptions = {}): Promise<Shot> {
-    const { png, cssWidth } = await this.capture();
+    const { image: png, format: captured, cssWidth } = await this.capture();
+    // A JPEG (the Marley extension sends one when the PNG would be too large) goes as it is: no marks, no scaling (this
+    // package decodes PNG only). The decision still has the elements' refs in its text.
+    if (captured === 'jpeg') return { data: png.toString('base64'), mimeType: 'image/jpeg' };
     const marks = (options.marks ?? []).flatMap((element): Mark[] =>
       element.box && !element.offscreen ? [{ ref: element.ref, box: element.box }] : [],
     );
@@ -264,19 +275,28 @@ export class UserTab implements Target {
       : { data: encodePng(image).toString('base64'), mimeType: 'image/png' };
   }
 
-  /** The bridge writes its PNG to a file of its own; it is read once and removed (a picture of the person's page). */
-  async capture(): Promise<{ png: Buffer; cssWidth: number }> {
+  /**
+   * The bridge writes its picture to a file of its own; it is read once and removed (a picture of the person's page).
+   * The format comes from the picture's own bytes (PNG, or the JPEG the extension sends for a very large page), never
+   * from a field; anything else is refused.
+   */
+  async capture(): Promise<{ image: Buffer; format: 'png' | 'jpeg'; cssWidth: number }> {
     const shot = await this.call<{ path?: string; data?: string; width?: number }>(
       'browserbridge.screenshot',
       { tabId: this.tabId },
     );
-    // An embedding host's transport may hand the PNG over directly instead of a file.
+    const typed = (image: Buffer): { image: Buffer; format: 'png' | 'jpeg'; cssWidth: number } => {
+      const format = imageFormat(image);
+      if (!format) throw new BridgeError('failed', 'screenshot is neither a PNG nor a JPEG');
+      return { image, format, cssWidth: Number(shot.width) || 0 };
+    };
+    // An embedding host's transport may hand the picture over directly instead of a file.
     if (typeof shot.data === 'string' && shot.data && shot.path === undefined)
-      return { png: Buffer.from(shot.data, 'base64'), cssWidth: Number(shot.width) || 0 };
+      return typed(Buffer.from(shot.data, 'base64'));
     if (typeof shot.path !== 'string' || !shot.path)
       throw new BridgeError('failed', 'screenshot returned no file');
     try {
-      return { png: await this.read(shot.path), cssWidth: Number(shot.width) || 0 };
+      return typed(await this.read(shot.path));
     } finally {
       await this.remove(shot.path).catch(() => undefined);
     }

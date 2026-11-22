@@ -19,7 +19,8 @@ import type {
 import { activate, activateEmbedded } from '../src/extension.js';
 import { agentProfileDir, chromeArgs, ChromeLauncher, isHeaded } from '../src/chrome/launcher.js';
 import { BridgeError, type BridgeClient, type BridgeElement } from '../src/user/bridge.js';
-import { encodePng } from '../src/user/image.js';
+import { encodeJpeg, encodePng, imageFormat, jpegSize } from '../src/user/image.js';
+import { UserTab } from '../src/user/tab.js';
 import { FakeDecider, type Turn } from './helpers.js';
 
 const URL = 'https://shop.example.com/account';
@@ -687,5 +688,82 @@ describe("prepareLaunch: the host's display, never an inherited one", () => {
     );
     await expect(launcher.processFor('agent')).rejects.toThrow(/BROWSER_START_FAILED/);
     expect(readFileSync(out, 'utf8')).not.toMatch(/--headless/);
+  });
+});
+
+describe("the person's Chrome sends a JPEG (the Marley extension does for a page whose PNG is too large)", () => {
+  const JPEG = encodeJpeg(
+    { width: 320, height: 180, data: new Uint8Array(320 * 180 * 4).fill(128) },
+    70,
+  );
+
+  it('the format comes from the bytes, and a JPEG header gives its size', () => {
+    expect(imageFormat(PNG)).toBe('png');
+    expect(imageFormat(JPEG)).toBe('jpeg');
+    expect(imageFormat(Buffer.from('not an image'))).toBeNull();
+    expect(jpegSize(JPEG)).toEqual({ width: 320, height: 180 });
+    expect(jpegSize(PNG)).toBeNull();
+  });
+
+  it('a screenshot passes the JPEG as it is (image/jpeg), even when marks, a width or PNG were asked for', async () => {
+    const bridge = new RelayBridge({
+      'browserbridge.screenshot': () => ({
+        tabId: 7,
+        data: JPEG.toString('base64'),
+        width: 320,
+        height: 180,
+        format: 'jpeg',
+      }),
+    });
+    const tab = await UserTab.open(bridge, URL);
+    const marked = await tab.screenshot({
+      marks: [
+        { ...item('e4'), label: 'x', kind: 'click', where: 'center', node: '4', box: [1, 1, 5, 5] },
+      ] as never,
+      width: 100,
+      format: 'png',
+    });
+    expect(marked).toEqual({ data: JPEG.toString('base64'), mimeType: 'image/jpeg' });
+    // The format field is not trusted: PNG bytes labelled jpeg are still a PNG.
+    bridge.handlers['browserbridge.screenshot'] = () => ({
+      data: PNG.toString('base64'),
+      width: 200,
+      format: 'jpeg',
+    });
+    expect((await tab.screenshot()).mimeType).toBe('image/png');
+  });
+
+  it('bytes that are neither PNG nor JPEG are refused as failed', async () => {
+    const bridge = new RelayBridge({
+      'browserbridge.screenshot': () => ({
+        data: Buffer.from('GIF89a....').toString('base64'),
+        width: 10,
+      }),
+    });
+    const tab = await UserTab.open(bridge, URL);
+    await expect(tab.screenshot()).rejects.toMatchObject({ code: 'failed' });
+  });
+
+  it('polled screencast frames pass a JPEG through with the size from its header', async () => {
+    const bridge = new RelayBridge({
+      'browserbridge.screenshot': () => ({
+        data: JPEG.toString('base64'),
+        width: 320,
+        format: 'jpeg',
+      }),
+    });
+    const tab = await UserTab.open(bridge, URL, { sleep: () => Promise.resolve() });
+    const frames: { data: string; width: number; height: number }[] = [];
+    let first: () => void = () => undefined;
+    const got = new Promise<void>((resolve) => {
+      first = resolve;
+    });
+    const cast = await tab.screencast({ maxWidth: 100 }, (data, meta) => {
+      frames.push({ data, width: meta.width, height: meta.height });
+      first();
+    });
+    await got;
+    await cast.stop();
+    expect(frames[0]).toEqual({ data: JPEG.toString('base64'), width: 320, height: 180 });
   });
 });

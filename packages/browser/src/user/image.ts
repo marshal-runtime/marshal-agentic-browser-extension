@@ -17,6 +17,33 @@ export interface Rgba {
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+/** The picture's format by its signature bytes (PNG's 8-byte signature, JPEG's SOI marker), or null for anything else. */
+export function imageFormat(data: Buffer): 'png' | 'jpeg' | null {
+  if (data.length >= 8 && data.subarray(0, 8).equals(SIGNATURE)) return 'png';
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'jpeg';
+  return null;
+}
+
+/** A JPEG's pixel size from its first start-of-frame segment (SOF0-SOF15 except DHT, JPG and DAC), or null. */
+export function jpegSize(data: Buffer): { width: number; height: number } | null {
+  let offset = 2;
+  while (offset + 4 <= data.length) {
+    if (data[offset] !== 0xff) return null;
+    const marker = data[offset + 1] ?? 0;
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    const length = data.readUInt16BE(offset + 2);
+    const frame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+    if (frame && offset + 9 <= data.length)
+      return { height: data.readUInt16BE(offset + 5), width: data.readUInt16BE(offset + 7) };
+    if (marker === 0xd9 || marker === 0xda || length < 2) return null;
+    offset += 2 + length;
+  }
+  return null;
+}
+
 export function decodePng(png: Buffer): Rgba {
   if (png.length < 8 || !png.subarray(0, 8).equals(SIGNATURE)) throw new Error('IMAGE_NOT_PNG');
   let offset = 8;

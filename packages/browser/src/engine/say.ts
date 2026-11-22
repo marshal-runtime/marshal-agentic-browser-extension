@@ -61,6 +61,7 @@ export const SAY = {
   readValues: 'Reading the answer from the page',
   extract: 'Reading the answer from the page',
   note: 'Noting what this page shows',
+  loop: 'Stopped: going back and forth between the same pages',
   open: (url: string): string => {
     try {
       return `Opening ${new URL(url).host}`;
