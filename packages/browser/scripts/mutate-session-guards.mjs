@@ -175,6 +175,14 @@ const MUTATIONS = [
   },
 ];
 
+MUTATIONS.push({
+  name: 'captures past 16,384 device px: GPU compositing back on',
+  file: 'src/chrome/launcher.ts',
+  from: "'--mute-audio', '--disable-gpu-compositing']",
+  to: "'--mute-audio']",
+  tests: [REAL],
+});
+
 const results = [];
 for (const mutation of MUTATIONS) {
   const file = path.join(root, mutation.file);

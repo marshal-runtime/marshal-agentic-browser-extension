@@ -70,7 +70,11 @@ export function chromeArgs(
       ? ['--disable-component-update', '--disable-background-networking']
       : []),
     '--window-size=1280,800',
-    ...(headed ? [] : ['--headless=new', '--hide-scrollbars', '--mute-audio']),
+    // --disable-gpu-compositing: a GPU-composited capture taller than 16,384 device px (Chrome's largest texture) repeats
+    // the top of the page past that row. Software compositing keeps hardware WebGL, which --disable-gpu would remove.
+    ...(headed
+      ? []
+      : ['--headless=new', '--hide-scrollbars', '--mute-audio', '--disable-gpu-compositing']),
     'about:blank',
   ];
 }

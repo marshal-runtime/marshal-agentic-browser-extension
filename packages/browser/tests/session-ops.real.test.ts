@@ -10,6 +10,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BrowserService } from '../src/capabilities.js';
 import { findChrome } from '../src/chrome/launcher.js';
+import { decodePng } from '../src/user/image.js';
 import { FakeDecider } from './helpers.js';
 
 const chrome = findChrome();
@@ -32,7 +33,7 @@ const PAGES: Record<string, string> = {
 <button onclick="document.getElementById('f').click()">Choose files</button><p id="n">none</p>`,
   '/one-input': `<!doctype html><title>One</title><input type="file" id="f" onchange="document.getElementById('n').textContent=this.files[0].name"><p id="n">none</p>`,
   '/single': `<!doctype html><title>Single</title><input type="file" id="f" style="display:none"><button onclick="document.getElementById('f').click()">Pick</button>`,
-  '/tall': `<!doctype html><title>Tall</title><meta name="viewport" content="width=device-width"><style>body{margin:0}div{height:1000px}</style>${Array.from({ length: 17 }, (_, i) => `<div style="background:hsl(${String(i * 20)},60%,60%)">Block ${String(i)}</div>`).join('')}`,
+  '/tall': `<!doctype html><title>Tall</title><meta name="viewport" content="width=device-width"><style>body{margin:0}div{height:1000px}</style>${Array.from({ length: 17 }, (_, i) => `<div style="background:rgb(${String(i * 15)},0,${String(255 - i * 15)})"></div>`).join('')}`,
 };
 
 let server: http.Server;
@@ -370,6 +371,8 @@ describe.skipIf(!chrome.path)('session operations in a real Chrome', () => {
     // A whole page taller than the old 12,000 px cap, at a pixel ratio of 2 (Page Studio's page shots).
     const whole = await call('browser.session.screenshot', { sessionId, fullPage: true });
     expect(pngSize(readFileSync(String(whole['path'])))).toEqual({ width: 780, height: 34_000 });
+    // Past 16,384 device px a GPU-composited capture repeats the top of the page: every block must be its own colour.
+    expect(blockColours(String(whole['path']), 2)).toEqual(TALL_BLOCKS);
 
     expect(
       await call('browser.session.viewport', { sessionId, width: 1280, height: 800 }),
@@ -380,6 +383,11 @@ describe.skipIf(!chrome.path)('session operations in a real Chrome', () => {
         '({w: innerWidth, dpr: devicePixelRatio, touch: navigator.maxTouchPoints})',
       ),
     ).toEqual({ w: 1280, dpr: 1, touch: 0 });
+    const desktop = await call('browser.session.screenshot', {
+      sessionId,
+      clip: { x: 0, y: 0, width: 1280, height: 17_000 },
+    });
+    expect(blockColours(String(desktop['path']), 1)).toEqual(TALL_BLOCKS);
     const bad = await call('browser.session.viewport', { sessionId, width: 20, height: 800 });
     expect(String(bad['error'])).toMatch(/BROWSER_BAD_INPUT: viewport.width/);
     await call('browser.session.close', { sessionId });
@@ -398,6 +406,17 @@ describe.skipIf(!chrome.path)('session operations in a real Chrome', () => {
     }
   });
 });
+
+const TALL_BLOCKS = Array.from({ length: 17 }, (_, i) => [i * 15, 0, 255 - i * 15]);
+
+/** The colour in the middle of each 1000 CSS px block of /tall, read from the captured PNG. */
+function blockColours(file: string, ratio: number): number[][] {
+  const image = decodePng(readFileSync(file));
+  return TALL_BLOCKS.map((_, i) => {
+    const offset = ((i * 1000 + 500) * ratio * image.width + 10) * 4;
+    return Array.from(image.data.subarray(offset, offset + 3));
+  });
+}
 
 function pngSize(data: Buffer): { width: number; height: number } {
   return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
