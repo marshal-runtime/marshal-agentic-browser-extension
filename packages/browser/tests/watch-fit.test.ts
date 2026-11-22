@@ -390,7 +390,32 @@ describe('the page follows the panel', () => {
     });
     await flush();
     expect(target.fits).toHaveLength(2);
+    // A pixel ratio no screen has is dropped: the page gets one device pixel per CSS pixel.
+    await lifecycle.invoke('browser.watch.frame', {
+      watchId,
+      view: { width: 900, height: 700, dpr: 99, fit: true, viewer: 'p-abc123' },
+    });
+    await flush();
+    expect(target.fits.at(-1)).toEqual({ width: 900, height: 700, deviceScaleFactor: 1 });
+    // Two viewer names that are no plain ids are both dropped, so they are one (unnamed) panel: the second resizes.
     await lifecycle.dispose();
+    const second = new PaneTarget(pages);
+    const again = new Lifecycle({ sessionTarget: () => second, artifactRoot: () => '/tmp' });
+    const other = await again.invoke('browser.watch', { sessionId: 's', open: false });
+    const otherId = String(other['watchId']);
+    await flush();
+    await again.invoke('browser.watch.frame', {
+      watchId: otherId,
+      view: { width: 800, height: 600, dpr: 1, fit: true, viewer: 'not a plain id' },
+    });
+    await flush();
+    await again.invoke('browser.watch.frame', {
+      watchId: otherId,
+      view: { width: 640, height: 480, dpr: 1, fit: true, viewer: 'nor <this>' },
+    });
+    await flush();
+    expect(second.fits.at(-1)).toEqual({ width: 640, height: 480, deviceScaleFactor: 1 });
+    await again.dispose();
   });
 });
 
@@ -700,6 +725,54 @@ describe('a sharp picture', () => {
     watches.poll(id, Number(second['seq']), VIEW);
     await flush();
     expect(target.stills).toBe(3);
+    await watches.dispose();
+  });
+
+  it('a resized page is never taken for an echo: its frame is shown at once, then sharpened', async () => {
+    const now = { at: 1_000 };
+    const { watches, target, id } = await fitted(now);
+    const same = still();
+    target.nextStill = same;
+    target.frame();
+    await flush();
+    const first = watches.poll(id, undefined, VIEW);
+    // The look after the echo finds the same bytes: the picture is settled.
+    now.at += 40;
+    target.frame();
+    now.at += ECHO_MS;
+    watches.poll(id, Number(first['seq']), VIEW);
+    await flush();
+    expect(target.stills).toBe(2);
+    // The pane is dragged narrower right then: the page's first frame at the new size falls inside the echo window.
+    const narrow = { ...VIEW, width: 600, height: 900 };
+    watches.poll(id, Number(first['seq']), narrow);
+    await flush();
+    expect(target.size).toMatchObject({ width: 600, height: 900 });
+    now.at += 40;
+    target.nextStill = null;
+    target.frame(600, 900);
+    await flush();
+    const resized = watches.poll(id, Number(first['seq']), narrow);
+    expect(resized['frame']).toMatchObject({ width: 600, height: 900, pageWidth: 600 });
+    await watches.dispose();
+  });
+
+  it('a frame taken for an echo is shown when the look after it cannot be taken', async () => {
+    const now = { at: 1_000 };
+    const { watches, target, id } = await fitted(now);
+    target.nextStill = still();
+    target.frame();
+    await flush();
+    const first = watches.poll(id, undefined, VIEW);
+    now.at += 60;
+    target.frame(); // a real change inside the echo window
+    target.nextStill = null; // and the page cannot be captured now (a dialog opened)
+    now.at += ECHO_MS;
+    watches.poll(id, Number(first['seq']), VIEW);
+    await flush();
+    const second = watches.poll(id, Number(first['seq']), VIEW);
+    expect(frameIn(second)).toMatchObject({ mimeType: 'image/jpeg' });
+    expect(second['lastFrameAt']).toBe(1_060);
     await watches.dispose();
   });
 

@@ -140,6 +140,8 @@ interface Watch {
   stillData: string | null;
   /** The frame a capture is replacing, shown instead if the capture cannot be taken. */
   held: Frame | null;
+  /** The newest frame taken for a capture's echo: shown when the look after it cannot be taken. */
+  missed: Frame | null;
   /** When the recent frames arrived (three in a short while: the page is moving). */
   arrivals: number[];
   /** Times of recent inputs (rate limit). */
@@ -316,6 +318,7 @@ export class WatchRegistry {
       settled: false,
       stillData: null,
       held: null,
+      missed: null,
       arrivals: [],
       inputs: [],
       chain: Promise.resolve(),
@@ -619,6 +622,7 @@ export class WatchRegistry {
     watch.seq += 1;
     watch.frame = frame;
     watch.held = null;
+    watch.missed = null;
     watch.settled = false;
   }
 
@@ -638,11 +642,6 @@ export class WatchRegistry {
     // Keep frames bounded: a heavy page gets a lower quality from the next poll on.
     if (bytes > FRAME_MAX_BYTES && watch.quality > QUALITY.min)
       watch.quality = Math.max(QUALITY.min, watch.quality - QUALITY.step);
-    const stuck = watch.stilling && now - watch.stillBegan > CAPTURE_SLOW_MS;
-    if (!stuck && (watch.stilling || now - watch.stillAt < ECHO_MS)) {
-      watch.recheck = true;
-      return;
-    }
     const frame: Frame = {
       data,
       width: meta.width,
@@ -654,6 +653,18 @@ export class WatchRegistry {
         ? { pageWidth: meta.pageWidth, pageHeight: meta.pageHeight }
         : {}),
     };
+    const stuck = watch.stilling && now - watch.stillBegan > CAPTURE_SLOW_MS;
+    // A page of another size than the one shown (the pane was resized) is no echo of a capture: show it.
+    const shown = watch.frame;
+    const resized =
+      shown?.pageWidth !== undefined &&
+      frame.pageWidth !== undefined &&
+      (shown.pageWidth !== frame.pageWidth || shown.pageHeight !== frame.pageHeight);
+    if (!stuck && !resized && (watch.stilling || now - watch.stillAt < ECHO_MS)) {
+      watch.recheck = true;
+      watch.missed = frame;
+      return;
+    }
     watch.settled = false;
     watch.arrivals = watch.arrivals.filter((at) => now - at < MOTION.withinMs);
     watch.arrivals.push(now);
@@ -681,8 +692,9 @@ export class WatchRegistry {
     const seq = watch.seq;
     const shown = watch.frame;
     const fallBack = (): void => {
-      const held = watch.held;
+      const held = watch.held ?? watch.missed;
       watch.held = null;
+      watch.missed = null;
       if (held && watch.seq === seq) this.show(watch, held);
     };
     target
@@ -699,6 +711,7 @@ export class WatchRegistry {
         }
         if (shown?.sharp && still.data === watch.stillData) {
           watch.held = null;
+          watch.missed = null;
           watch.settled = true;
           return;
         }
@@ -861,6 +874,7 @@ export class WatchRegistry {
     const streaming = watch.streaming;
     watch.streaming = null;
     watch.held = null;
+    watch.missed = null;
     watch.arrivals = [];
     const handle = await streaming?.handle;
     await handle?.stop().catch(() => undefined);

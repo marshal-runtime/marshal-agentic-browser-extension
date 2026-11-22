@@ -135,7 +135,7 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.watch.frame',
-    version: '0.2.1',
+    version: '0.3.0',
     title: 'Newest live frame of a watch',
     description:
       "The watch panel's poll: the task's state and newest step, the page's address and title, when the picture last changed, whether the person may use the page from the panel, and the newest frame (base64) when it is newer than `since`. `view` is the panel's picture area in device pixels; with `fit` the page itself takes the panel's size like a browser pane (managed Chrome, unless the caller set the viewport or a recording runs). Without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
@@ -224,7 +224,7 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.watch.input',
-    version: '0.2.1',
+    version: '0.3.0',
     title: 'Use the watched page from the live panel',
     description:
       "The live panel's input: a click or wheel at a point of the picture (nx, ny from 0 to 1), a named key, printable text, back / forward / reload, or navigate to a web address typed in the panel (http or https only). Only for a session on the managed backend that no task drives (status view_only otherwise, never on the person's own Chrome or an app); text and editing keys are refused while a password, code or card field has focus (status secret_field); at most 20 inputs a second (status rate_limited). Meant for the panel; agents use browser.session.act.",

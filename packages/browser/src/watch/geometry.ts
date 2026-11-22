@@ -142,7 +142,6 @@ export function addressOf(typed: string): string | null {
   const text = typed.trim();
   if (!text || text.length > 2_000 || /[\s\p{Cc}]/u.test(text)) return null;
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(text)?.[1]?.toLowerCase();
-  if (scheme !== undefined && scheme !== 'http' && scheme !== 'https') return null;
   const loopback = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(text);
   let url: URL;
   try {
