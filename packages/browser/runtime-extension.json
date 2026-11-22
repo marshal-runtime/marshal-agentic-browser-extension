@@ -42,6 +42,20 @@
           "type": "boolean",
           "description": "Also save every step's marked screenshot as a task artifact (default false)."
         },
+        "planLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Longest plan one decision may return: the step also asks for up to this many actions in order, each re-checked on a fresh snapshot and through every guard before it is taken (default 6; 1 = one action per decision)."
+        },
+        "valuePointers": {
+          "type": "boolean",
+          "description": "Read flat want.data values (strings, numbers) from the page lines the confirming decision points at, instead of a separate extract call (default true)."
+        },
+        "speculativeExtract": {
+          "type": "boolean",
+          "description": "Start the want.data extract beside a decision that is likely the last, instead of after it; an unused one is dropped (default true)."
+        },
         "userVision": {
           "type": "boolean",
           "description": "Attach a screenshot to decisions on the person's own Chrome (default false: text only, so no picture of their pages goes to the model provider)."

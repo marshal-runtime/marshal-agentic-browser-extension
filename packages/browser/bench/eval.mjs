@@ -4,7 +4,10 @@
 // session starts, so no Claude subscription is used.
 //
 //   node bench/eval.mjs --sdk /path/to/marshal-sdk/dist/src/index.js --out /tmp/browser-eval [--runs 3] [--concurrency 3]
-//        [--only id1,id2] [--probes]
+//        [--only id1,id2] [--probes] [--package <staged package root>]
+//
+// --package loads the extension from another folder (a symlink-free staged copy of dist/, runtime-extension.json and
+// package.json; the host refuses a package with node_modules symlinks), so two builds run under the same harness.
 //
 // The key comes from OPENAI_API_KEY, or with --gcloud-key from the company secret (the way Page Studio reads it).
 import { execFileSync } from 'node:child_process';
@@ -16,7 +19,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TASKS } from './tasks.mjs';
 
 const args = parseArgs(process.argv.slice(2));
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const packageRoot = args.package
+  ? path.resolve(String(args.package))
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.resolve(args.out ?? path.join(os.tmpdir(), `browser-eval-${Date.now()}`));
 const runs = Number(args.runs ?? 3);
 const concurrency = Number(args.concurrency ?? 3);
@@ -117,7 +122,7 @@ async function runOne(task, round) {
     verdict = { ok: false, why: `check threw: ${error}` };
   }
   const trace = result?.trace ?? [];
-  const decisions = trace.filter((s) => s.rung === 1 && s.action !== 'decide');
+  const decisions = trace.filter((s) => s.rung === 1 && s.action !== 'decide' && !s.planned);
   const retries = [];
   trace.forEach((step, i) => {
     if (String(step.note ?? '').startsWith('low confidence: re-deciding')) {
@@ -144,6 +149,13 @@ async function runOne(task, round) {
     wallMs,
     steps: result?.stats?.steps,
     decisions: result?.stats?.decisions,
+    // Every model request the run made: rung-1 decisions, rung-2 extracts, and the `auto` routing predicate (always one
+    // when the input has no `on` and no `needsLogin`, as every bench task). Older builds report no modelCalls stat.
+    modelCalls:
+      result?.stats?.modelCalls ??
+      (result?.stats?.decisions ?? 0) +
+        trace.filter((s) => s.rung === 2).length +
+        (input.on === undefined && input.needsLogin === undefined ? 1 : 0),
     decisionMs: result?.stats?.decisionMs,
     inputTokens: result?.stats?.inputTokens,
     retries,
@@ -151,11 +163,17 @@ async function runOne(task, round) {
       String(s.note ?? '').startsWith('low confidence, confirmed'),
     ).length,
     confidences: decisions.map((s) => s.confidence).filter((c) => typeof c === 'number'),
+    plannedActions: result?.stats?.plannedActions,
+    unusedCalls: result?.stats?.unusedCalls,
     trace: trace.map((s) => ({
       step: s.step,
       action: s.action,
       rung: s.rung,
       ms: s.ms,
+      actMs: s.actMs,
+      snapMs: s.snapMs,
+      shotMs: s.shotMs,
+      planned: s.planned,
       conf: s.confidence,
       checks: s.checks,
       outcome: s.outcome,
@@ -180,6 +198,7 @@ function summarise(rows) {
       pass: 0,
       statuses: {},
       decisions: [],
+      modelCalls: [],
       retries: 0,
       retriesAgreed: 0,
       confirmed: 0,
@@ -191,6 +210,7 @@ function summarise(rows) {
     const status = `${row.status}${row.reason ? `:${row.reason}` : ''}`;
     entry.statuses[status] = (entry.statuses[status] ?? 0) + 1;
     entry.decisions.push(row.decisions ?? 0);
+    entry.modelCalls.push(row.modelCalls ?? 0);
     entry.steps.push(row.steps ?? 0);
     entry.wallMs.push(row.wallMs);
     entry.retries += row.retries.length;
@@ -205,12 +225,17 @@ function summarise(rows) {
       ...e,
       medianWallMs: median(e.wallMs),
       medianDecisions: median(e.decisions),
+      medianModelCalls: median(e.modelCalls),
+      p90WallMs: pct(e.wallMs, 0.9),
       medianSteps: median(e.steps),
     })),
     totals: {
       runs: rows.length,
       pass: rows.filter((r) => r.ok).length,
       decisions: rows.reduce((n, r) => n + (r.decisions ?? 0), 0),
+      modelCalls: rows.reduce((n, r) => n + (r.modelCalls ?? 0), 0),
+      medianWallMs: median(rows.map((r) => r.wallMs)),
+      p90WallMs: pct(rows.map((r) => r.wallMs), 0.9),
       retries: rows.reduce((n, r) => n + r.retries.length, 0),
       retriesAgreed: rows.reduce((n, r) => n + r.retries.filter((x) => x.agreed).length, 0),
       runsUsingConfirm: retryRows.length,
@@ -228,8 +253,8 @@ function summarise(rows) {
 
 function table(summary) {
   const lines = [
-    '| task | kind | pass | stops | median decisions | retries (agreed) | median ms |',
-    '|---|---|---|---|---|---|---|',
+    '| task | kind | pass | stops | median decisions | median model calls | retries (agreed) | median ms | p90 ms |',
+    '|---|---|---|---|---|---|---|---|---|',
   ];
   for (const t of summary.tasks)
     lines.push(
@@ -237,12 +262,12 @@ function table(summary) {
         .map(([s, n]) => `${s} x${n}`)
         .join(
           ', ',
-        )} | ${t.medianDecisions} | ${t.retries} (${t.retriesAgreed}) | ${t.medianWallMs} |`,
+        )} | ${t.medianDecisions} | ${t.medianModelCalls} | ${t.retries} (${t.retriesAgreed}) | ${t.medianWallMs} | ${t.p90WallMs} |`,
     );
   const s = summary.totals;
   lines.push(
     '',
-    `Total ${s.pass}/${s.runs} passed; ${s.decisions} decisions; ${s.retries} low-confidence retries, ${s.retriesAgreed} picked the same action again; ${s.runsUsingConfirm} runs used a confirmed-by-retry action, ${s.runsUsingConfirmPassed} of them passed.`,
+    `Total ${s.pass}/${s.runs} passed; ${s.decisions} decisions; ${s.modelCalls} model calls; wall median ${s.medianWallMs} ms, p90 ${s.p90WallMs} ms; ${s.retries} low-confidence retries, ${s.retriesAgreed} picked the same action again; ${s.runsUsingConfirm} runs used a confirmed-by-retry action, ${s.runsUsingConfirmPassed} of them passed.`,
   );
   lines.push(
     `Next-action confidence over ${s.confidence.n} decisions: p10 ${s.confidence.p10}, median ${s.confidence.p50}; ${s.confidence.below040} below 0.40, ${s.confidence.below025} below 0.25.`,

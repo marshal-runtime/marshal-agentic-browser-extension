@@ -84,12 +84,27 @@ export interface Turn {
   readonly probabilities?: Record<string, number>;
   /** Answer without a next_action (the service dropped the question). */
   readonly missing?: boolean;
+  /**
+   * The chain after next_action, each `[choice, confidence]`: the conditional question about `choice` answers the first
+   * entry, the one about that entry answers the second, and so on; every other conditional question answers `look`.
+   * Unset: no plan answers.
+   */
+  readonly plan?: readonly (readonly [string, number])[];
+  readonly planNeedsOwner?: number;
+  readonly doneAfter?: number;
+  /** value_1, value_2, ...: `[line key or 'none', confidence]`. */
+  readonly values?: readonly (readonly [string, number])[];
 }
 
 /** A scripted decide service: each judge() answers the next turn (the last one repeats) and records its input. */
 export class FakeDecider implements Decider {
   readonly judged: DecideMultiInput[] = [];
   readonly extracted: DecideSchemaInput[] = [];
+  /** Goal triage calls (only `start_page_answers`), answered by `startPage` and kept out of `judged`. */
+  readonly triaged: DecideMultiInput[] = [];
+  /** Set to make extract() wait until released (a slow extract beside a decision). */
+  extractGate: Promise<void> | null = null;
+  startPage = false;
   private index = 0;
   constructor(
     private readonly turns: Turn[],
@@ -97,11 +112,55 @@ export class FakeDecider implements Decider {
     private readonly extractAnswer: unknown = { price: 42 },
   ) {}
   judge(input: DecideMultiInput): ReturnType<Decider['judge']> {
+    const keys = Object.keys(input.questions);
+    if (keys.length === 1 && keys[0] === 'start_page_answers') {
+      this.triaged.push(input);
+      return Promise.resolve({
+        success: true as const,
+        answers: {
+          start_page_answers: { type: 'predicate', probability: this.startPage ? 0.9 : 0.1 },
+        },
+      });
+    }
     this.judged.push(input);
     if (this.failWith) return Promise.reject(this.failWith);
     const turn = this.turns[Math.min(this.index, this.turns.length - 1)] as Turn;
     this.index += 1;
+    const extra: Record<string, DecideAnswer> = {};
+    if (turn.plan) {
+      const links = new Map<string, readonly [string, number]>();
+      let previous = turn.choice;
+      for (const link of turn.plan) {
+        if (!links.has(previous)) links.set(previous, link);
+        previous = link[0];
+      }
+      for (const [key, question] of Object.entries(input.questions)) {
+        if (!key.startsWith('after_')) continue;
+        const condition =
+          /ends with: (.+?)(?: \(|, and it did)/.exec(question.instructions ?? '')?.[1] ?? '';
+        const [choice, confidence] = links.get(condition) ?? ['look', 0.9];
+        extra[key] = {
+          type: 'choice',
+          choice,
+          confidence,
+          probabilities: { [choice]: confidence },
+        };
+      }
+      extra['plan_needs_owner'] = { type: 'predicate', probability: turn.planNeedsOwner ?? 0.02 };
+      extra['done_after'] = { type: 'predicate', probability: turn.doneAfter ?? 0.1 };
+    } else if (turn.doneAfter !== undefined) {
+      extra['done_after'] = { type: 'predicate', probability: turn.doneAfter };
+    }
+    turn.values?.forEach(([choice, confidence], index) => {
+      extra[`value_${String(index + 1)}`] = {
+        type: 'choice',
+        choice,
+        confidence,
+        probabilities: { [choice]: confidence },
+      };
+    });
     const answers: Record<string, DecideAnswer> = {
+      ...extra,
       ...(turn.missing
         ? {}
         : {
@@ -118,9 +177,10 @@ export class FakeDecider implements Decider {
     };
     return Promise.resolve({ success: true as const, answers, usage: { input_tokens: 100 } });
   }
-  extract(input: DecideSchemaInput): ReturnType<Decider['extract']> {
+  async extract(input: DecideSchemaInput): ReturnType<Decider['extract']> {
     this.extracted.push(input);
-    return Promise.resolve({ success: true as const, choice: this.extractAnswer });
+    if (this.extractGate) await this.extractGate;
+    return { success: true as const, choice: this.extractAnswer };
   }
   probe(): ReturnType<Decider['probe']> {
     return Promise.resolve({ available: true, detail: 'fake' });
