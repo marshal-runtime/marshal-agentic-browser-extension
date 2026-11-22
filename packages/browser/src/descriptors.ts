@@ -112,8 +112,8 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     }),
     permissions: permission(
       'browser.session.open',
-      'Opens websites in a Chrome the browser extension starts.',
-      'low',
+      'Opens websites in a Chrome the browser extension starts, or a background tab of the person\'s own Chrome. High risk with profile "agent" (the agent\'s lasting logins) or on "user" (the person\'s own signed-in Chrome).',
+      'medium',
     ),
   },
   {
@@ -228,7 +228,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
           type: 'object',
           additionalProperties: { type: 'string' },
           description:
-            'The only strings the task may type, by name (e.g. {"email": "..."}). Their names, never the values, go to the model.',
+            'The only strings the task may type, by name (e.g. {"email": "..."}). The model reads their names only, and \u27e8value <name>\u27e9 where the page text shows one (values of 3 characters or more); the screenshot still shows the page as it is.',
         },
         want: object({
           data: {
@@ -299,7 +299,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     }),
     permissions: permission(
       'browser.task',
-      'Runs a multi-step task (clicks, typing supplied values) in a Chrome the browser extension starts.',
+      'Runs a multi-step task (clicks, typing supplied values) in a Chrome the browser extension starts or the person\'s own Chrome. High risk with profile "agent" (the agent\'s lasting logins) or on "user" (the person\'s own signed-in Chrome).',
       'medium',
     ),
   },
@@ -337,6 +337,11 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       elapsedMs: { type: 'number' },
       screenshotPath: { type: 'string' },
     }),
+    permissions: permission(
+      'browser.ask',
+      'Opens a page and sends its screenshot and text to the decision model. High risk with profile "agent" (the agent\'s lasting logins) or on "user" (the person\'s own signed-in Chrome).',
+      'medium',
+    ),
   },
   ...LIFECYCLE_DESCRIPTORS,
 ];

@@ -110,7 +110,16 @@ describe('guards', () => {
     expect(
       linkNeedsOwner(el('e1', { tag: 'a', href: 'https://shop.com/billing/plan' }), page),
     ).toBe(true);
-    expect(linkNeedsOwner(el('e1', { tag: 'a', href: 'mailto:x@shop.com' }), page)).toBe(false);
+    // Any scheme but http(s) leaves the page for another app (L4); javascript: and about: stay in the page.
+    for (const href of [
+      'mailto:x@shop.com',
+      'tel:+15551234',
+      'zoommtg://join',
+      'file:///etc/passwd',
+    ])
+      expect(linkNeedsOwner(el('e1', { tag: 'a', href }), page), href).toBe(true);
+    for (const href of ['javascript:void(0)', 'about:blank'])
+      expect(linkNeedsOwner(el('e1', { tag: 'a', href }), page), href).toBe(false);
     // A button labelled "Pay now" is the model's call (needs_owner question), not a word list here.
     expect(linkNeedsOwner(el('e1', { tag: 'button', label: 'Pay now' }), page)).toBe(false);
   });

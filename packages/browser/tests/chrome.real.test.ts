@@ -16,6 +16,7 @@ import type { Decider } from '../src/engine/decider.js';
 import type { DecideAnswer, DecideMultiInput } from '../src/contracts.js';
 import { DECISION_SHOT } from '../src/target.js';
 import { saveShot } from './helpers.js';
+import { BrowserService } from '../src/capabilities.js';
 
 /** Width and height from a JPEG's start-of-frame marker. */
 function jpegSize(data: Buffer): { width: number; height: number } | null {
@@ -44,13 +45,49 @@ const FORM = `<!doctype html><html><head><title>Fixture form</title></head><body
 <a href="/other">Other page</a>
 </body></html>`;
 
+// Form targets as the snapshot must report them: another host, a button's own formaction, and a field named "action"
+// (which hides form.action from a script that reads the property instead of the attribute).
+const FORMS = `<!doctype html><html><head><title>Forms</title></head><body>
+<form action="https://collect.example.net/steal" method="post">
+  <label>Email <input name="email" type="email"></label>
+  <button>Subscribe</button>
+  <button formaction="/local">Save here</button>
+</form>
+<form action="/search"><input name="action" aria-label="Action field"><button type="submit">Go</button></form>
+<form method="dialog"><button>Close dialog</button></form>
+<button>Outside</button>
+</body></html>`;
+
+/** Gathers ICE candidates for 4 s against a public STUN server and returns their types. */
+const ICE_SCRIPT = `return await new Promise((resolve) => {
+  const types = [];
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  pc.createDataChannel('x');
+  pc.onicecandidate = (event) => { if (event.candidate) types.push(event.candidate.type + '/' + event.candidate.protocol); };
+  pc.createOffer().then((offer) => pc.setLocalDescription(offer));
+  setTimeout(() => { pc.close(); resolve(types); }, 4000);
+});`;
+
 let server: http.Server;
+/** Every path the fixture server was asked for, with its Host header. */
+const requests: string[] = [];
 let base = '';
 
 beforeAll(async () => {
   server = http.createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
-    if (url.pathname === '/') {
+    requests.push(`${request.headers.host ?? ''}${url.pathname}`);
+    if (url.pathname === '/xform') {
+      // A search form that posts to another site: localhost is not 127.0.0.1's site.
+      const port = (server.address() as { port: number }).port;
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(
+        `<!doctype html><title>Docs</title><form action="http://localhost:${String(port)}/collect"><label>Search <input name="q" type="search"></label><button>Search</button></form>`,
+      );
+    } else if (url.pathname === '/forms') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(FORMS);
+    } else if (url.pathname === '/') {
       response.writeHead(200, {
         'content-type': 'text/html',
         'set-cookie': 'seen=1; Max-Age=3600; Path=/',
@@ -237,4 +274,163 @@ describe.skipIf(!chrome.path)('managed Chrome (real)', () => {
       await launcher.closeAll();
     }
   }, 90_000);
+
+  it('snapshot: each control in a form carries the absolute address it sends to (H2)', async () => {
+    const launcher = new ChromeLauncher();
+    try {
+      const tab = await ManagedTab.open(launcher, 'visitor');
+      await tab.act({ kind: 'navigate', url: `${base}/forms` });
+      const snap = await tab.snapshot();
+      const by = (label: string): string | undefined =>
+        snap.elements.find((element) => element.label.includes(label))?.formAction;
+      expect(snap.formActionsKnown).toBe(true);
+      expect(by('Email')).toBe('https://collect.example.net/steal');
+      expect(by('Subscribe')).toBe('https://collect.example.net/steal');
+      expect(by('Save here')).toBe(`${base}/local`);
+      expect(by('Action field')).toBe(`${base}/search`);
+      expect(by('Go')).toBe(`${base}/search`);
+      expect(by('Close dialog')).toBeUndefined();
+      expect(by('Outside')).toBeUndefined();
+      await tab.close();
+    } finally {
+      await launcher.closeAll();
+    }
+  }, 60_000);
+
+  it('session.act refuses to type into a password field (M7)', async () => {
+    const launcher = new ChromeLauncher();
+    try {
+      const tab = await ManagedTab.open(launcher, 'visitor');
+      await tab.act({ kind: 'navigate', url: `${base}/` });
+      const snap = await tab.snapshot();
+      const password = snap.elements.find((element) => element.type === 'password');
+      const typed = await tab.act({
+        kind: 'type',
+        ref: password?.ref ?? 'missing',
+        text: 'hunter2',
+      });
+      expect(typed).toMatchObject({ ok: false });
+      expect(typed.error).toContain('secret-field');
+      expect(await tab.evaluate("return document.querySelector('[name=pw]').value")).toBe('');
+      await tab.close();
+    } finally {
+      await launcher.closeAll();
+    }
+  }, 60_000);
+
+  it.each(['offline', 'visitor'] as const)(
+    '%s: WebRTC sends no UDP outside the proxy, so no STUN (srflx) candidate appears (H3)',
+    async (profile) => {
+      const launcher = new ChromeLauncher();
+      try {
+        const tab = await ManagedTab.open(launcher, profile);
+        await tab.act({ kind: 'navigate', url: 'data:text/html,<title>rtc</title>' });
+        const types = (await tab.evaluate(ICE_SCRIPT)) as string[];
+        expect(types.filter((type) => type.startsWith('srflx'))).toEqual([]);
+        expect(types.filter((type) => type.endsWith('/udp'))).toEqual([]);
+        await tab.close();
+      } finally {
+        await launcher.closeAll();
+      }
+    },
+    60_000,
+  );
+
+  describe('the guards hold on the service paths of #5 (wait:false, cancel)', () => {
+    /** Types the value, then presses Enter; a gate lets a test hold the Enter decision. */
+    const scripted = (gate?: Promise<void>): Decider => ({
+      async judge(input) {
+        const offers = Object.keys(
+          (input.questions['next_action'] as { criteria: Record<string, string> }).criteria,
+        );
+        const pick =
+          offers.find((offer) => offer.startsWith('submit ')) ??
+          offers.find((offer) => offer.startsWith('type ')) ??
+          'blocked';
+        if (pick.startsWith('submit ') && gate) await gate;
+        const answers: Record<string, DecideAnswer> = {
+          next_action: {
+            type: 'choice',
+            choice: pick,
+            confidence: 0.9,
+            probabilities: { [pick]: 0.9 },
+          },
+          goal_met: { type: 'predicate', probability: 0.05 },
+          needs_owner: { type: 'predicate', probability: 0.02 },
+          page_ready: { type: 'predicate', probability: 0.98 },
+        };
+        return { success: true as const, answers };
+      },
+      extract: () => Promise.resolve({ success: true as const, choice: {} }),
+      probe: () => Promise.resolve({ available: true, detail: 'scripted' }),
+    });
+    const poll = async (
+      service: BrowserService,
+      taskId: string,
+    ): Promise<Record<string, unknown>> => {
+      for (let i = 0; i < 200; i += 1) {
+        const got = (await service.invoke('browser.task.get', { taskId })).output as Record<
+          string,
+          unknown
+        >;
+        if (got['result']) return got['result'] as Record<string, unknown>;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      throw new Error('task did not finish');
+    };
+
+    it('a background task (wait:false) stops at a form that sends off-site; nothing reaches the other host', async () => {
+      const service = new BrowserService(() => scripted(), { artifactDir: os.tmpdir() });
+      requests.length = 0;
+      try {
+        const started = (
+          await service.invoke('browser.task', {
+            goal: 'Search the docs for the value query',
+            startUrl: `${base}/xform`,
+            on: 'managed',
+            values: { query: 'private-term' },
+            wait: false,
+          })
+        ).output as Record<string, unknown>;
+        expect(started).toMatchObject({ state: 'running' });
+        const result = await poll(service, String(started['taskId']));
+        expect(result).toMatchObject({ status: 'needs_owner', reason: 'form_leaves_site' });
+        expect(requests.filter((entry) => entry.endsWith('/collect'))).toEqual([]);
+      } finally {
+        await service.dispose();
+      }
+    }, 90_000);
+
+    it('a task cancelled while it decides on the send never sends', async () => {
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const service = new BrowserService(() => scripted(gate), { artifactDir: os.tmpdir() });
+      requests.length = 0;
+      try {
+        const started = (
+          await service.invoke('browser.task', {
+            goal: 'Search the docs for the value query',
+            startUrl: `${base}/xform`,
+            on: 'managed',
+            values: { query: 'private-term' },
+            wait: false,
+          })
+        ).output as Record<string, unknown>;
+        const taskId = String(started['taskId']);
+        for (let i = 0; i < 100 && !requests.some((entry) => entry.endsWith('/xform')); i += 1)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const cancelling = service.invoke('browser.task.cancel', { taskId });
+        open();
+        await cancelling;
+        const result = await poll(service, taskId);
+        expect(result['status']).toBe('cancelled');
+        expect(requests.filter((entry) => entry.endsWith('/collect'))).toEqual([]);
+      } finally {
+        await service.dispose();
+      }
+    }, 90_000);
+  });
 });

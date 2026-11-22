@@ -66,7 +66,7 @@
     "purpose": "One browser for agents: a Chrome it starts (agent, visitor, offline profiles), the person's own Chrome (on:\"user\") or a native macOS app via Accessibility (on:\"app\"). A task is a code loop; each step is one marshal.models.decide call.",
     "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. on:\"user\" works in the person's own signed-in Chrome. Call browser.status to see what is ready.",
     "recipe": "browser.task {goal, startUrl, want: {data: <JSON schema>, text, screenshot}, values: {name: text to type}} returns {status, data, text, artifacts, trace}. On needs_owner, needs_input or low_confidence, read reason, candidates and the screenshot, then decide yourself.",
-    "boundaries": "Types only the caller's values. Stops in code on off-site, OAuth, checkout or payment links and typed app signals; never offers password fields. Own Chrome: background tabs, text-only unless userVision. Apps: no real input unless allowRealInput."
+    "boundaries": "Task: types only caller values (model reads names); stops in code on leaving its site, off-site forms/links, OAuth/checkout/payment pages, private addresses, typed app signals. No backend types into password fields. Own Chrome: background tabs, text-only; apps: no real input unless allowRealInput."
   },
   "contributes": {
     "capabilities": [

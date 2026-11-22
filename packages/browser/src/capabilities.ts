@@ -379,6 +379,10 @@ export class BrowserService {
       };
     }
     const existing = typeof args['sessionId'] === 'string' ? this.session(args, bridge) : null;
+    // No browser opens for a task that cannot decide anything. The probe sees a missing or refused capability, not a
+    // missing key (marshal-sdk reads the key only when it sends a request).
+    const unavailable = await decideUnavailable(decider);
+    if (unavailable) return unavailable;
     const want = (args['want'] ?? {}) as TaskInput['want'];
     if (want?.video) {
       // A task that asked for a video never runs without a recorder (no silent missing video).
@@ -471,13 +475,7 @@ export class BrowserService {
     let session: Session | null = existing;
     let recording: Recording | null = null;
     const bounds = (args['bounds'] ?? {}) as Record<string, unknown>;
-    const settings: Partial<EngineSettings> = {
-      ...(this.configuration.minConfidence
-        ? { minConfidence: this.configuration.minConfidence }
-        : {}),
-      ...(this.configuration.maxSteps ? { maxSteps: this.configuration.maxSteps } : {}),
-      ...(this.configuration.wallMs ? { wallMs: this.configuration.wallMs } : {}),
-    };
+    const settings = engineSettings(this.configuration);
     try {
       if (signal.aborted) return cancelled;
       session ??=
@@ -587,6 +585,8 @@ export class BrowserService {
     const existing = typeof args['sessionId'] === 'string' ? this.session(args, bridge) : null;
     if (!existing && typeof args['url'] !== 'string')
       throw new Error('BROWSER_BAD_INPUT: url or sessionId is required');
+    const unavailable = await decideUnavailable(decider);
+    if (unavailable) return { ...unavailable, ok: false };
     const onUser = existing ? existing.tab.backend === 'user' : args['on'] === 'user';
     const session =
       existing ??
@@ -663,6 +663,30 @@ export class BrowserService {
       }
     }
   }
+}
+
+/** The task result for a host whose decide capability is missing or refused, or null when it is offered. */
+async function decideUnavailable(decider: Decider): Promise<Record<string, unknown> | null> {
+  const probe = await decider.probe();
+  if (probe.available) return null;
+  return {
+    ok: true,
+    status: 'decisions_unavailable',
+    reason: probe.detail,
+    trace: [],
+    artifacts: [],
+  };
+}
+
+/** Engine settings from the extension's configuration; a configured 0 counts (a threshold of 0 turns a gate off). */
+export function engineSettings(configuration: BrowserConfiguration): Partial<EngineSettings> {
+  return {
+    ...(configuration.minConfidence !== undefined
+      ? { minConfidence: configuration.minConfidence }
+      : {}),
+    ...(configuration.maxSteps ? { maxSteps: configuration.maxSteps } : {}),
+    ...(configuration.wallMs ? { wallMs: configuration.wallMs } : {}),
+  };
 }
 
 function profileOf(value: unknown, fallback: ManagedProfile): ManagedProfile {

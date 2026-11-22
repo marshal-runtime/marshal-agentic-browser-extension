@@ -21,6 +21,7 @@ export interface RawRow {
   readonly tag?: string;
   readonly type?: string;
   readonly href?: string;
+  readonly formAction?: string;
   readonly secret?: boolean;
 }
 
@@ -87,6 +88,8 @@ export function toSnapshot(raw: RawSnapshot): Snapshot {
     canScrollUp,
     viewport: { w: raw.w, h: raw.h },
     omitted: raw.omittedActions,
+    // SNAPSHOT_SCRIPT stamps every control inside a form with its formAction.
+    formActionsKnown: true,
   };
 }
 
@@ -107,6 +110,7 @@ function element(
     kind,
     ...(value === undefined || value === '' ? {} : { value }),
     ...(row.href ? { href: row.href } : {}),
+    ...(row.formAction ? { formAction: row.formAction } : {}),
     ...(row.checked === undefined ? {} : { checked: row.checked }),
     ...(row.secret ? { secret: true } : {}),
     ...(row.offscreen ? { offscreen: true } : {}),

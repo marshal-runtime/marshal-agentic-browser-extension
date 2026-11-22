@@ -170,7 +170,8 @@ describe('stop reasons', () => {
       {
         choice: 'click e2',
         confidence: 0.1,
-        probabilities: { 'click e2': 0.1, 'click e1': 0.09 },
+        // The retry's pick (click e1) is not among this decision's two most likely actions.
+        probabilities: { 'click e2': 0.1, wait: 0.09, 'click e1': 0.05 },
       },
       {
         choice: 'click e1',

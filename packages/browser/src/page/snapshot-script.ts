@@ -6,6 +6,8 @@
  *   b. Every row carries `tag`, `type` and, for a link, its absolute `href`: the typed signals the needs-owner
  *      guard reads (engine/guards.ts).
  *   c. MARKER_SCRIPT is not lifted: the step engine takes a full snapshot every step.
+ *   d. A control inside a form carries the absolute `formAction` its form sends to, for the form guard
+ *      (engine/guards.ts `formNeedsOwner`).
  *
  * The original header follows.
  *
@@ -53,6 +55,16 @@ const safe = e => !['file', 'hidden'].includes(e.type);
 const secretTokens = ['current-password', 'new-password', 'one-time-code', 'cc-number', 'cc-csc', 'cc-exp'];
 const isSecret = e => e.type === 'password' ||
   String(e.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/).some(t => secretTokens.includes(t));
+// Where the control's form sends its data: a submit button's own formaction wins, then the form's action, then the
+// document (a form without one posts back to its page). Read from the attributes: \`form.action\` is shadowed by a
+// field named "action". A method="dialog" form sends nothing anywhere.
+const formActionOf = e => {
+  const form = e.form || (e.closest && e.closest('form'));
+  if (!form || String(form.getAttribute('method') || '').toLowerCase() === 'dialog') return undefined;
+  const own = e.hasAttribute && e.hasAttribute('formaction') ? e.getAttribute('formaction') : null;
+  try { return new URL(own ?? form.getAttribute('action') ?? '', form.ownerDocument.baseURI).href.slice(0, 500); }
+  catch { return 'about:invalid'; }
+};
 const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
   e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
 const name = (e, seen = new Set()) => {
@@ -171,9 +183,11 @@ function buildActionRows(item, offscreen, bucket) {
   const box = [Math.round(offsetX + r.x), Math.round(offsetY + r.y), Math.round(r.width), Math.round(r.height)];
   const near = nearText(e);
   const secret = isSecret(e);
+  const formAction = formActionOf(e);
   const base = { node: nodeId, role: rname, label: name(e) || rname, box, ...(near ? { near } : {}),
     ...(pathPrefix ? { source: 'dom' } : {}), tag: e.tagName.toLowerCase(), type: String(e.type || '').toLowerCase(),
-    ...(e.tagName === 'A' && e.href ? { href: String(e.href).slice(0, 500) } : {}), ...(secret ? { secret: true } : {}) };
+    ...(e.tagName === 'A' && e.href ? { href: String(e.href).slice(0, 500) } : {}), ...(secret ? { secret: true } : {}),
+    ...(formAction ? { formAction } : {}) };
   if (offscreen) {
     base.offscreen = true;
     base.where = y < 0 ? 'above' : y >= innerHeight ? 'below' : regionOf(x, y);

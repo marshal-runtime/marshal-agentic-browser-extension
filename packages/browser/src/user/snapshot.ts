@@ -53,6 +53,9 @@ export function bridgeToSnapshot(raw: BridgeSnapshot): Snapshot {
     canScrollUp: scrollY > 0,
     viewport: { w, h },
     omitted: omitted + (raw.elementsTruncated === true ? 1 : 0),
+    // Only a bridge that says it reports form targets is trusted for them (it has no evaluate verb to ask the page);
+    // without it the engine treats every submit as going anywhere (engine/guards.ts formNeedsOwner).
+    ...(raw.formActions === true ? { formActionsKnown: true } : {}),
   };
 }
 
@@ -102,6 +105,9 @@ function toElement(item: BridgeElement, ref: string, w: number, h: number): Snap
     kind,
     ...(value === undefined ? {} : { value }),
     ...(item.href ? { href: item.href } : {}),
+    ...(typeof item.formAction === 'string' && item.formAction
+      ? { formAction: item.formAction }
+      : {}),
     ...(typeof item.checked === 'boolean' ? { checked: item.checked ? 'true' : 'false' } : {}),
     ...(secret ? { secret: true } : {}),
     ...(offscreen ? { offscreen: true } : {}),

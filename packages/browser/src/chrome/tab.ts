@@ -19,6 +19,7 @@ import {
   selectScript,
 } from '../page/scripts.js';
 import { isRawSnapshot, toSnapshot } from '../page/to-snapshot.js';
+import { isSecret } from '../engine/guards.js';
 import type {
   ActOutcome,
   ManagedProfile,
@@ -170,6 +171,14 @@ export class ManagedTab implements Target {
       }
       const node = this.nodeOf(action.ref);
       if (!node) return { ok: false, error: `unknown ref ${action.ref} (take a new snapshot)` };
+      // A password, one-time-code or card field is never typed into, clicked or sent from here, even by a direct
+      // browser.session.act (the user tab refuses the same; the task engine never offers one).
+      const element = this.last?.elements.find((entry) => entry.ref === action.ref);
+      if (element && isSecret(element))
+        return {
+          ok: false,
+          error: 'secret-field: a password, code or card field; the person types it themselves',
+        };
       switch (action.kind) {
         case 'click':
           return await this.settleAfter(() => this.click(node));

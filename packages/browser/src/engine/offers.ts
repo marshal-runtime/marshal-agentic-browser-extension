@@ -42,6 +42,42 @@ export interface OfferContext {
   readonly canGoBack: boolean;
 }
 
+/** Values shorter than this are not masked: a one- or two-letter value would turn every word of a page into a token. */
+export const MIN_MASKED_VALUE = 3;
+
+/**
+ * Every place a caller value appears in text sent to the model becomes `⟨value <name>⟩`: the model never reads the
+ * value, yet it can see where the page shows it (a "Results for ⟨value query⟩" heading), which is what lets it confirm a
+ * goal that names a value (bench: httpbin-form and the shop fixtures failed for want of it). Case-sensitive, longest
+ * value first. The screenshot still shows the page as it is.
+ */
+export function maskValues(text: string, values: Readonly<Record<string, string>>): string {
+  let out = text;
+  for (const [name, value] of maskable(values)) out = out.split(value).join(`⟨value ${name}⟩`);
+  return out;
+}
+
+/** Puts the values back into data the model extracted from masked text (strings at any depth). */
+export function unmaskValues(data: unknown, values: Readonly<Record<string, string>>): unknown {
+  if (typeof data === 'string') {
+    let out = data;
+    for (const [name, value] of maskable(values)) out = out.split(`⟨value ${name}⟩`).join(value);
+    return out;
+  }
+  if (Array.isArray(data)) return data.map((item) => unmaskValues(item, values));
+  if (data && typeof data === 'object')
+    return Object.fromEntries(
+      Object.entries(data).map(([key, item]) => [key, unmaskValues(item, values)]),
+    );
+  return data;
+}
+
+function maskable(values: Readonly<Record<string, string>>): [string, string][] {
+  return Object.entries(values)
+    .filter(([, value]) => value.length >= MIN_MASKED_VALUE)
+    .sort((a, b) => b[1].length - a[1].length);
+}
+
 /**
  * A field that holds one of the caller's values is described by the value's NAME: the values are typed into the page
  * but never sent to the model (the capability promises names, not values), and a typed field echoes its text back.
@@ -68,7 +104,8 @@ export function describeElement(
     bits.push(element.checked === 'true' ? 'checked' : 'unchecked');
   if (element.near) bits.push(`near "${clip(element.near, 40)}"`);
   bits.push(element.offscreen ? 'offscreen' : (element.where ?? ''));
-  return bits.filter(Boolean).join(', ');
+  // A label, link address or nearby text can echo a value too ("Results for shoes").
+  return maskValues(bits.filter(Boolean).join(', '), values);
 }
 
 export function buildOffers(snapshot: Snapshot, context: OfferContext): Offer[] {
@@ -116,7 +153,10 @@ export function buildOffers(snapshot: Snapshot, context: OfferContext): Offer[] 
           kind: 'select',
           element,
           optionValue: option.value,
-          description: `set ${described} to "${clip(option.label, 60)}"`,
+          description: maskValues(
+            `set ${described} to "${clip(option.label, 60)}"`,
+            context.values,
+          ),
         });
       });
       continue;
