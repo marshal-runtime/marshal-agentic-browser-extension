@@ -510,6 +510,7 @@ describe('M2 / M3 / R4: stop threshold, top-2 agreement and the goal_met rule', 
     expect(target.actions).toEqual([{ kind: 'click', ref: 'e1' }]);
     for (const turn of [
       { choice: 'wait', goalMet: 0.9 },
+      { choice: 'scroll_down', confidence: 0.9, goalMet: 0.9 },
       { choice: 'click e1', confidence: 0.1, goalMet: 0.9 },
     ]) {
       const stopped = new FakeTarget([page(HOME, [el('e1')])]);

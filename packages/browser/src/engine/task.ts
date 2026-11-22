@@ -207,6 +207,8 @@ const PROMPT_MAX = 9000;
 const RESULT_TEXT = 20_000;
 const MAX_ERRORS = 3;
 const STOP_CHOICES: ReadonlySet<string> = new Set(['done', 'blocked', 'need_value', 'ask_owner']);
+/** Picks that leave the page's state as it is: with a high goal_met they end the task rather than run. */
+const STILL_CHOICES: ReadonlySet<string> = new Set(['done', 'wait', 'scroll_down', 'scroll_up']);
 const MAX_WAITS_IN_ROW = 2;
 
 export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskResult> {
@@ -499,13 +501,14 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
           .map(([action, p]) => `${action} ${p.toFixed(2)}`)
           .join(', ');
 
-      // goal_met alone ends the task only when the model's own pick does not disagree: `done`, `wait`, or a pick below
-      // the gate. A confident page action with a high goal_met is taken (bench smoke: `submit e1` at 0.85 with goal_met
-      // 0.97 used to end the task without the submit).
+      // goal_met alone ends the task only when the model's own pick changes nothing on the page (`done`, `wait`, a
+      // scroll) or is below the gate. A confident page action with a high goal_met is taken (bench smoke: `submit e1` at
+      // 0.85 with goal_met 0.97 used to end the task without the submit). A scroll is not: on quotes-page3 the scrolled
+      // view then made the extraction read the wrong "first" quote (bench, 2026-11-22, 2 of 3 runs).
       const weakPick = choice.confidence < settings.minConfidence;
       if (
         (checks.goalMet >= settings.goalMetThreshold &&
-          (choice.choice === 'done' || choice.choice === 'wait' || weakPick)) ||
+          (STILL_CHOICES.has(choice.choice) || weakPick)) ||
         (choice.choice === 'done' && checks.goalMet >= 0.4)
       ) {
         record('stop', 'goal met');
