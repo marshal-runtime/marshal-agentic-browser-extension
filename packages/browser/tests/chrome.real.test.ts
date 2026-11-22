@@ -44,13 +44,39 @@ const FORM = `<!doctype html><html><head><title>Fixture form</title></head><body
 <a href="/other">Other page</a>
 </body></html>`;
 
+// Form targets as the snapshot must report them: another host, a button's own formaction, and a field named "action"
+// (which hides form.action from a script that reads the property instead of the attribute).
+const FORMS = `<!doctype html><html><head><title>Forms</title></head><body>
+<form action="https://collect.example.net/steal" method="post">
+  <label>Email <input name="email" type="email"></label>
+  <button>Subscribe</button>
+  <button formaction="/local">Save here</button>
+</form>
+<form action="/search"><input name="action" aria-label="Action field"><button type="submit">Go</button></form>
+<form method="dialog"><button>Close dialog</button></form>
+<button>Outside</button>
+</body></html>`;
+
+/** Gathers ICE candidates for 4 s against a public STUN server and returns their types. */
+const ICE_SCRIPT = `return await new Promise((resolve) => {
+  const types = [];
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  pc.createDataChannel('x');
+  pc.onicecandidate = (event) => { if (event.candidate) types.push(event.candidate.type + '/' + event.candidate.protocol); };
+  pc.createOffer().then((offer) => pc.setLocalDescription(offer));
+  setTimeout(() => { pc.close(); resolve(types); }, 4000);
+});`;
+
 let server: http.Server;
 let base = '';
 
 beforeAll(async () => {
   server = http.createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
-    if (url.pathname === '/') {
+    if (url.pathname === '/forms') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(FORMS);
+    } else if (url.pathname === '/') {
       response.writeHead(200, {
         'content-type': 'text/html',
         'set-cookie': 'seen=1; Max-Age=3600; Path=/',
@@ -237,4 +263,65 @@ describe.skipIf(!chrome.path)('managed Chrome (real)', () => {
       await launcher.closeAll();
     }
   }, 90_000);
+
+  it('snapshot: each control in a form carries the absolute address it sends to (H2)', async () => {
+    const launcher = new ChromeLauncher();
+    try {
+      const tab = await ManagedTab.open(launcher, 'visitor');
+      await tab.act({ kind: 'navigate', url: `${base}/forms` });
+      const snap = await tab.snapshot();
+      const by = (label: string): string | undefined =>
+        snap.elements.find((element) => element.label.includes(label))?.formAction;
+      expect(snap.formActionsKnown).toBe(true);
+      expect(by('Email')).toBe('https://collect.example.net/steal');
+      expect(by('Subscribe')).toBe('https://collect.example.net/steal');
+      expect(by('Save here')).toBe(`${base}/local`);
+      expect(by('Action field')).toBe(`${base}/search`);
+      expect(by('Go')).toBe(`${base}/search`);
+      expect(by('Close dialog')).toBeUndefined();
+      expect(by('Outside')).toBeUndefined();
+      await tab.close();
+    } finally {
+      await launcher.closeAll();
+    }
+  }, 60_000);
+
+  it('session.act refuses to type into a password field (M7)', async () => {
+    const launcher = new ChromeLauncher();
+    try {
+      const tab = await ManagedTab.open(launcher, 'visitor');
+      await tab.act({ kind: 'navigate', url: `${base}/` });
+      const snap = await tab.snapshot();
+      const password = snap.elements.find((element) => element.type === 'password');
+      const typed = await tab.act({
+        kind: 'type',
+        ref: password?.ref ?? 'missing',
+        text: 'hunter2',
+      });
+      expect(typed).toMatchObject({ ok: false });
+      expect(typed.error).toContain('secret-field');
+      expect(await tab.evaluate("return document.querySelector('[name=pw]').value")).toBe('');
+      await tab.close();
+    } finally {
+      await launcher.closeAll();
+    }
+  }, 60_000);
+
+  it.each(['offline', 'visitor'] as const)(
+    '%s: WebRTC sends no UDP outside the proxy, so no STUN (srflx) candidate appears (H3)',
+    async (profile) => {
+      const launcher = new ChromeLauncher();
+      try {
+        const tab = await ManagedTab.open(launcher, profile);
+        await tab.act({ kind: 'navigate', url: 'data:text/html,<title>rtc</title>' });
+        const types = (await tab.evaluate(ICE_SCRIPT)) as string[];
+        expect(types.filter((type) => type.startsWith('srflx'))).toEqual([]);
+        expect(types.filter((type) => type.endsWith('/udp'))).toEqual([]);
+        await tab.close();
+      } finally {
+        await launcher.closeAll();
+      }
+    },
+    60_000,
+  );
 });

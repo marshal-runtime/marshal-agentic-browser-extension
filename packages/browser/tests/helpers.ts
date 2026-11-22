@@ -35,6 +35,8 @@ export function page(url: string, elements: SnapshotElement[], text = 'page text
     canScrollUp: false,
     viewport: { w: 1280, h: 800 },
     omitted: 0,
+    // As the managed snapshot reports it; a user-backend test passes its own snapshot without it.
+    formActionsKnown: true,
   };
 }
 
@@ -80,6 +82,8 @@ export interface Turn {
   readonly needsOwner?: number;
   readonly pageReady?: number;
   readonly probabilities?: Record<string, number>;
+  /** Answer without a next_action (the service dropped the question). */
+  readonly missing?: boolean;
 }
 
 /** A scripted decide service: each judge() answers the next turn (the last one repeats) and records its input. */
@@ -98,12 +102,16 @@ export class FakeDecider implements Decider {
     const turn = this.turns[Math.min(this.index, this.turns.length - 1)] as Turn;
     this.index += 1;
     const answers: Record<string, DecideAnswer> = {
-      next_action: {
-        type: 'choice',
-        choice: turn.choice,
-        confidence: turn.confidence ?? 0.9,
-        probabilities: turn.probabilities ?? { [turn.choice]: turn.confidence ?? 0.9 },
-      },
+      ...(turn.missing
+        ? {}
+        : {
+            next_action: {
+              type: 'choice',
+              choice: turn.choice,
+              confidence: turn.confidence ?? 0.9,
+              probabilities: turn.probabilities ?? { [turn.choice]: turn.confidence ?? 0.9 },
+            } as DecideAnswer,
+          }),
       goal_met: { type: 'predicate', probability: turn.goalMet ?? 0.05 },
       needs_owner: { type: 'predicate', probability: turn.needsOwner ?? 0.02 },
       page_ready: { type: 'predicate', probability: turn.pageReady ?? 0.97 },

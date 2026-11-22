@@ -42,11 +42,28 @@ and record run there too, but that path is not exercised by these tests.
    a JPEG with a numbered box on each offered element.
 2. **Rung 1 (one decide call):** `marshal.models.decide` gets the page, the history, the value _names_ and the marked
    screenshot, and answers four questions at once: `next_action` (a choice over the offers), `goal_met`, `needs_owner`
-   and `page_ready` (yes/no predicates).
-3. **Gates in code:** below `minConfidence` the engine re-decides once on a fresh snapshot and acts only if the retry
-   picks the same page action; a secret field is never offered; typed text comes only from `values`; a link that leaves
-   the site, or whose path is an OAuth, consent, checkout, payment, billing or install page, stops with `needs_owner`;
-   the same action on an unchanged page three times, three failed actions, the step bound and the wall clock all stop.
+   and `page_ready` (yes/no predicates). Wherever the page text, a label or the goal shows one of the caller's values
+   (3 characters or more), the model reads `⟨value <name>⟩` instead; extracted data gets the value back. The
+   screenshot still shows the page as it is.
+3. **Gates in code:**
+   - A page action below `minConfidence` (0.15), or `need_value` / `blocked` below 0.4, is re-decided once on a fresh
+     snapshot; the retry acts only when it picks one of the first decision's two most likely page actions. `done` is
+     taken when `goal_met` agrees (0.75, or 0.4 when the model itself picked `done`), or when it is picked twice at
+     0.75 or more. A high `goal_met` alone ends the task only when the pick is `done`, `wait` or below the gate.
+     A missing `next_action` is asked once more.
+   - The task's home site is `startUrl`'s (or the first page's). Typing, choosing, sending a form and returning data
+     happen only there (subdomains and `allowedSites` count); otherwise `needs_owner` / `left_site`. A public task
+     that the page moves to a loopback, private, link-local or metadata address stops with `private_address`.
+   - A form is checked by where it sends (the snapshot reports each control's `formAction`) before Enter in one of
+     its fields or a click on its submit button: another site, or an OAuth / checkout / payment / install path, stops
+     with `form_leaves_site`. The user backend cannot see form targets, so there a submit stops with
+     `form_target_unknown` once a caller value is on the page.
+   - A link that leaves the site, uses a non-page scheme (`mailto:`, `tel:`, an app link), or whose host or path is an
+     OAuth, consent, checkout, payment, billing or install step, stops with `needs_owner`.
+   - A secret field is never offered, and no backend types into one, `browser.session.act` included; typed text comes
+     only from `values`; the same action on an unchanged page three times, three failed actions, the step bound and
+     the wall clock all stop.
+   - `browser.task` and `browser.ask` check the decide capability before they open anything.
 4. **Rung 2:** when the goal is met and `want.data` is a JSON schema, one decide call with that schema (and the
    screenshot) extracts the data.
 
@@ -59,11 +76,16 @@ Chrome is driven over `--remote-debugging-pipe`, so no debugging port is opened,
 Chrome. At most two processes start, on first use:
 
 - `agent`: a lasting profile (`~/.marshal/browser/profiles/agent`, or `profileRoot`), so logins persist. Headless
-  unless `headed` is set or, on Linux, a `DISPLAY` exists.
+  unless `headed` is set or, on Linux, a `DISPLAY` exists. The folder is 0700. On macOS its cookies are encrypted with
+  the login keychain ("Chrome Safe Storage"), not the mock keychain's fixed key; logins saved by an earlier version
+  (mock key) cannot be read after this change, so the agent signs in again once. Linux keeps the basic store.
 - `visitor` (the default) and `offline`: one throwaway, headless process. Each session gets its own fresh browser
   context (no cookies, no storage). `visitor` never intercepts a request (no Fetch domain, zygstinct rule SB21).
   `offline` sends every request, loopback included, to a dead proxy, so only `data:` and pages already in memory
-  render.
+  render. Its profile sets `webrtc.ip_handling_policy` to `disable_non_proxied_udp`, so a page cannot reach a STUN
+  server from `offline` or learn the machine's public address from `visitor`; component updates and background
+  networking are off. The temporary folder is removed on close, on process exit, and by the next start when a host
+  died before either.
 
 ## The user backend
 
@@ -122,6 +144,12 @@ bundle loads no image library); every decision carries it, as on the managed bac
   missing), whether the screen is locked (macOS then shows Accessibility clients no windows) and the running apps.
 - With few labelled controls (Electron, canvas apps), the OCR helper `native/ocr-helper` adds the window's text; its
   lines become click targets only with `allowRealInput`, since a point with no element behind it needs a real click.
+
+## Permissions
+
+Each capability asks `marshal.tool.invoke:<name>`. `browser.task`, `browser.ask` and `browser.session.open` are medium;
+their reason says the risk is high with `profile: "agent"` (the agent's lasting logins) or `on: "user"` (the person's
+own Chrome). Marshal's permission is per capability, so the input does not change the prompt's level.
 
 ## Configuration
 

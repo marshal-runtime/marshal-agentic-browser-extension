@@ -134,6 +134,8 @@ export interface BridgeElement {
   readonly expanded?: boolean;
   /** Added by the event-forwarding PR: the page judged this a password / one-time-code field even when empty. */
   readonly secret?: boolean;
+  /** Not sent by today's bridge: the absolute address a control's form sends to. Read only with `formActions`. */
+  readonly formAction?: string;
 }
 
 export interface BridgeSnapshot {
@@ -146,6 +148,8 @@ export interface BridgeSnapshot {
   readonly textTruncated?: boolean;
   readonly elements: readonly BridgeElement[];
   readonly elementsTruncated?: boolean;
+  /** Not sent by today's bridge: true when every control inside a form carries its `formAction`. */
+  readonly formActions?: boolean;
 }
 
 export interface BridgeTab {

@@ -22,6 +22,8 @@ export interface SnapshotElement {
   readonly kind: 'click' | 'fill' | 'select' | 'submit';
   readonly value?: string;
   readonly href?: string;
+  /** For a control inside a form: the absolute address the form sends to (its button's `formaction` wins). */
+  readonly formAction?: string;
   readonly checked?: string;
   readonly secret?: boolean;
   readonly offscreen?: boolean;
@@ -49,6 +51,11 @@ export interface Snapshot {
   readonly canScrollUp: boolean;
   readonly viewport: { readonly w: number; readonly h: number };
   readonly omitted: number;
+  /**
+   * True when every control inside a form carries its `formAction` (the managed snapshot). A backend that cannot see
+   * form targets (the user backend's bridge) leaves it unset, and the engine then treats a submit as going anywhere.
+   */
+  readonly formActionsKnown?: boolean;
 }
 
 export type TargetAction =

@@ -8,10 +8,19 @@
  *                  code never enables Fetch or request interception (zygstinct rule SB21);
  *       `offline`: a fresh context whose every request, loopback included, goes to a dead proxy, for pages we render.
  * Chrome is driven over --remote-debugging-pipe (cdp.ts): no debugging port is opened.
+ *
+ * Hardening (review G, 2026-11-22):
+ *   - ephemeral: WebRTC may not use UDP outside the proxy (profile preference `webrtc.ip_handling_policy`), so an offline page cannot reach a
+ *     STUN server and a visitor page cannot learn the machine's public address; no component updates and no background
+ *     networking (they grew a throwaway profile to 122 MB);
+ *   - lasting: the agent's user-data-dir is 0700, and on macOS its cookies are encrypted with the system keychain
+ *     (the mock keychain's fixed key let anyone who could read the folder use the agent's logins);
+ *   - a temporary user-data-dir is removed on close, on process exit (`exit` hook), and, when a host died before either,
+ *     by the next launcher (`sweepStaleProfiles`: a `marshal-browser-XXXXXX` folder whose Chrome is gone).
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmodSync, existsSync, lstatSync, readdirSync, readlinkSync, rmSync, statSync } from 'fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Readable, Writable } from 'node:stream';
@@ -30,6 +39,162 @@ export interface LauncherOptions {
 }
 
 export const DEAD_PROXY = 'http://127.0.0.1:9';
+
+/** mkdtemp's prefix; the sweep only ever touches `<prefix><6 characters>`. */
+export const TEMP_PREFIX = 'marshal-browser-';
+const TEMP_NAME = /^marshal-browser-[A-Za-z0-9]{6}$/;
+/** A temporary profile with no Chrome lock is left alone this long (another launcher may be starting into it). */
+const STALE_UNLOCKED_MS = 10 * 60_000;
+
+/** Chrome's command line for one process kind (pure, so tests read the exact flags). */
+export function chromeArgs(
+  kind: 'lasting' | 'ephemeral',
+  userDataDir: string,
+  headed: boolean,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return [
+    '--remote-debugging-pipe',
+    `--user-data-dir=${userDataDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-extensions',
+    '--disable-sync',
+    '--disable-features=Translate,MediaRouter,OptimizationHints',
+    // The agent's logins are kept by the system keychain on macOS. A throwaway profile, and Linux hosts (a brand VM
+    // has no keyring daemon), keep the basic store.
+    ...(kind === 'lasting' && platform === 'darwin'
+      ? []
+      : ['--password-store=basic', '--use-mock-keychain']),
+    ...(kind === 'ephemeral'
+      ? ['--disable-component-update', '--disable-background-networking']
+      : []),
+    '--window-size=1280,800',
+    ...(headed ? [] : ['--headless=new', '--hide-scrollbars', '--mute-audio']),
+    'about:blank',
+  ];
+}
+
+/**
+ * Profile preferences of a throwaway Chrome, written before it starts. WebRTC sends no UDP that bypasses the proxy:
+ * Chrome 158 ignores the old --force-webrtc-ip-handling-policy switch (a STUN server still saw the machine's public
+ * address), and the browser contexts of visitor and offline sessions inherit this profile's preferences.
+ */
+export const EPHEMERAL_PREFERENCES = {
+  webrtc: {
+    ip_handling_policy: 'disable_non_proxied_udp',
+    multiple_routes_enabled: false,
+    nonproxied_udp_enabled: false,
+  },
+} as const;
+
+async function writeEphemeralPreferences(userDataDir: string): Promise<void> {
+  await mkdir(path.join(userDataDir, 'Default'), { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(userDataDir, 'Default', 'Preferences'),
+    JSON.stringify(EPHEMERAL_PREFERENCES),
+    { mode: 0o600 },
+  );
+}
+
+/** Creates the agent profile folder private to this user, and makes an existing one private. */
+export async function prepareAgentDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if ((statSync(dir).mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
+}
+
+/** Pid of the Chrome that holds a user-data-dir (its `SingletonLock` link reads `<host>-<pid>`), or null. */
+function lockPid(dir: string): number | null {
+  try {
+    const target = readlinkSync(path.join(dir, 'SingletonLock'));
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/** Temporary profiles this process owns, removed synchronously if it exits before closing them. */
+const LIVE_TEMP_DIRS = new Set<string>();
+const LIVE_CHILDREN = new Set<ChildProcess>();
+let exitHookInstalled = false;
+
+/**
+ * Removes temporary profiles a dead host left behind: `marshal-browser-XXXXXX` folders owned by this user whose Chrome
+ * lock names a process that is gone, or that have no lock and were not touched for 10 minutes. Returns what it removed.
+ */
+export function sweepStaleProfiles(
+  root: string = os.tmpdir(),
+  alive: (pid: number) => boolean = pidAlive,
+  now: number = Date.now(),
+): string[] {
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!TEMP_NAME.test(name)) continue;
+    const dir = path.join(root, name);
+    if (LIVE_TEMP_DIRS.has(dir)) continue;
+    try {
+      const info = lstatSync(dir);
+      if (!info.isDirectory() || (process.getuid && info.uid !== process.getuid())) continue;
+      const pid = lockPid(dir);
+      const stale = pid === null ? now - info.mtimeMs > STALE_UNLOCKED_MS : !alive(pid);
+      if (!stale) continue;
+      rmSync(dir, { recursive: true, force: true });
+      removed.push(dir);
+    } catch {
+      // gone already, or not ours to remove
+    }
+  }
+  return removed;
+}
+
+/** What the `exit` hook does: kill this process's Chromes and remove its temporary profiles (exported for tests). */
+export function cleanupOnExit(): void {
+  for (const child of LIVE_CHILDREN) {
+    try {
+      if (child.exitCode === null) child.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+  // Chrome's helper processes outlive the killed browser by a moment and can write into the folder while it is being
+  // removed, so try again (synchronously, at most ~1 s in all) until it is gone. The next start's sweep is the backstop.
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (const dir of LIVE_TEMP_DIRS) {
+    for (let attempt = 0; attempt < 10 && existsSync(dir); attempt += 1) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // retried below
+      }
+      if (existsSync(dir)) Atomics.wait(pause, 0, 0, 100);
+    }
+  }
+}
+
+/** The temporary profiles the exit hook would remove now (for tests). */
+export const liveTempDirs = (): readonly string[] => [...LIVE_TEMP_DIRS];
+
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once('exit', cleanupOnExit);
+}
 
 const CANDIDATES: Readonly<Record<string, readonly string[]>> = {
   darwin: [
@@ -145,26 +310,18 @@ export class ChromeLauncher {
         this.options.profileRoot ?? path.join(os.homedir(), '.marshal', 'browser', 'profiles'),
         'agent',
       );
-      await mkdir(userDataDir, { recursive: true });
+      await prepareAgentDir(userDataDir);
     } else {
-      userDataDir = await mkdtemp(path.join(os.tmpdir(), 'marshal-browser-'));
+      sweepStaleProfiles();
+      userDataDir = await mkdtemp(path.join(os.tmpdir(), TEMP_PREFIX));
       temporary = true;
+      LIVE_TEMP_DIRS.add(userDataDir);
+      await writeEphemeralPreferences(userDataDir);
     }
-    const args = [
-      '--remote-debugging-pipe',
-      `--user-data-dir=${userDataDir}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      '--disable-sync',
-      '--disable-features=Translate,MediaRouter,OptimizationHints',
-      '--password-store=basic',
-      '--use-mock-keychain',
-      '--window-size=1280,800',
-      ...(headed ? [] : ['--headless=new', '--hide-scrollbars', '--mute-audio']),
-      'about:blank',
-    ];
+    installExitHook();
+    const args = chromeArgs(kind, userDataDir, headed, this.options.platform);
     const child = spawn(found.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    LIVE_CHILDREN.add(child);
     let stderr = '';
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
@@ -172,13 +329,17 @@ export class ChromeLauncher {
     });
     const exited = new Promise<number | null>((resolve) => {
       child.once('exit', (code) => {
+        LIVE_CHILDREN.delete(child);
         resolve(code);
       });
     });
     const connection = new CdpConnection(child.stdio[3] as Writable, child.stdio[4] as Readable);
     const close = async (): Promise<void> => {
       await shutdown(child, connection, exited);
-      if (temporary) await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+      if (temporary) {
+        await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+        LIVE_TEMP_DIRS.delete(userDataDir);
+      }
     };
     try {
       const version = await Promise.race([
