@@ -135,14 +135,23 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.watch.frame',
-    version: '0.2.1',
+    version: '0.3.0',
     title: 'Newest live frame of a watch',
     description:
-      "The watch panel's poll: the task's state and newest step, the page's address and title, when the picture last changed, whether the person may use the page from the panel, and the newest JPEG frame (base64) when it is newer than `since`; `view` (the panel's picture in device pixels) sizes the frames. Without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
+      "The watch panel's poll: the task's state and newest step, the page's address and title, when the picture last changed, whether the person may use the page from the panel, and the newest frame (base64) when it is newer than `since`. `view` is the panel's picture area in device pixels; with `fit` the page itself takes the panel's size like a browser pane (managed Chrome, unless the caller set the viewport or a recording runs). Without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
     inputSchema: object({
       watchId: { type: 'string' },
       since: { type: 'number' },
-      view: object({ width: { type: 'number' }, height: { type: 'number' } }, ['width', 'height']),
+      view: object(
+        {
+          width: { type: 'number' },
+          height: { type: 'number' },
+          dpr: { type: 'number', description: "The panel's devicePixelRatio." },
+          fit: { type: 'boolean', description: 'Size the page to this panel.' },
+          viewer: { type: 'string', description: 'Which panel asks (one keeps the size).' },
+        },
+        ['width', 'height'],
+      ),
     }),
     outputSchema: {
       type: 'object',
@@ -156,6 +165,24 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
         backend: { enum: ['managed', 'user', 'app'] },
         url: { type: 'string' },
         title: { type: 'string' },
+        loading: { type: 'boolean' },
+        canGoBack: { type: 'boolean' },
+        canGoForward: { type: 'boolean' },
+        page: object({
+          width: { type: 'number' },
+          height: { type: 'number' },
+          deviceScaleFactor: { type: 'number' },
+          fit: { type: 'boolean', description: "The page has the asking panel's size." },
+          pinned: {
+            type: 'boolean',
+            description: 'The caller set the viewport; the panel never resizes it.',
+          },
+        }),
+        pointer: object({
+          nx: { type: 'number' },
+          ny: { type: 'number' },
+          at: { type: 'number' },
+        }),
         lastFrameAt: { type: 'number', description: 'When the picture last changed (ms).' },
         frameBytes: { type: 'number' },
         quality: { type: 'number' },
@@ -165,6 +192,13 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
         },
         viewOnly: { enum: ['task', 'closed', 'user', 'app', 'unsupported'] },
         streamError: { type: 'string' },
+        ended: {
+          type: 'object',
+          description:
+            'In a session: the task that last ended in it (how it ended), for a minute after it ended.',
+          properties: { ...TASK_SUMMARY, finishedAt: { type: 'number' } },
+          additionalProperties: false,
+        },
         frame: object({
           data: { type: 'string' },
           mimeType: { enum: ['image/jpeg', 'image/png'] },
@@ -172,6 +206,10 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
             type: 'boolean',
             description:
               "The finished task's last picture (a panel opened or re-mounted after the task ended).",
+          },
+          sharp: {
+            type: 'boolean',
+            description: "A still at the page's own device pixels, taken once frames stopped.",
           },
           width: { type: 'number' },
           height: { type: 'number' },
@@ -186,17 +224,20 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.watch.input',
-    version: '0.2.1',
+    version: '0.3.0',
     title: 'Use the watched page from the live panel',
     description:
-      "The live panel's input: a click or wheel at a point of the picture (nx, ny from 0 to 1), a named key, printable text, or back / forward / reload. Only for a session on the managed backend that no task drives (status view_only otherwise, never on the person's own Chrome or an app); text and editing keys are refused while a password, code or card field has focus (status secret_field); at most 20 inputs a second (status rate_limited). Meant for the panel; agents use browser.session.act.",
+      "The live panel's input: a click or wheel at a point of the picture (nx, ny from 0 to 1), a named key, printable text, back / forward / reload, or navigate to a web address typed in the panel (http or https only). Only for a session on the managed backend that no task drives (status view_only otherwise, never on the person's own Chrome or an app); text and editing keys are refused while a password, code or card field has focus (status secret_field); at most 20 inputs a second (status rate_limited). Meant for the panel; agents use browser.session.act.",
     inputSchema: object(
       {
         watchId: { type: 'string' },
         event: {
           type: 'object',
           properties: {
-            kind: { enum: ['click', 'wheel', 'key', 'text', 'back', 'forward', 'reload'] },
+            kind: {
+              enum: ['click', 'wheel', 'key', 'text', 'back', 'forward', 'reload', 'navigate'],
+            },
+            url: { type: 'string', maxLength: 2000 },
             nx: { type: 'number', minimum: 0, maximum: 1 },
             ny: { type: 'number', minimum: 0, maximum: 1 },
             clickCount: { enum: [1, 2] },

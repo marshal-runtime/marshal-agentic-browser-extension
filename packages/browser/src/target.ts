@@ -223,6 +223,43 @@ export interface ScreencastHandle {
   stop(): Promise<void>;
 }
 
+/** What the live panel's toolbar shows: the address, the title, and what back / forward / the loading bar can do. */
+export interface PageLocation {
+  readonly url: string;
+  readonly title: string;
+  readonly loading?: boolean;
+  readonly canGoBack?: boolean;
+  readonly canGoForward?: boolean;
+}
+
+/**
+ * The page sized to the live panel: its viewport in CSS pixels and its pixel ratio (2 on a high-density screen, 3 on a phone), so
+ * the page reflows to the panel like a browser pane and its pixels land 1:1 on the panel's.
+ */
+export interface PanelFit {
+  readonly width: number;
+  readonly height: number;
+  readonly deviceScaleFactor: 1 | 2 | 3;
+}
+
+/** One picture of the page as it rests, at the page's own device pixels (sharper than a screencast frame). */
+export interface Still {
+  readonly data: string;
+  readonly mimeType: 'image/png' | 'image/jpeg';
+  readonly width: number;
+  readonly height: number;
+  /** The page's viewport in CSS pixels. */
+  readonly pageWidth: number;
+  readonly pageHeight: number;
+}
+
+/** Where the automation last clicked, in the page's CSS pixels (the live panel draws its pointer there). */
+export interface PointerMark {
+  readonly x: number;
+  readonly y: number;
+  readonly at: number;
+}
+
 /**
  * Input from a person in the live panel, already in page CSS pixels (src/watch/watches.ts maps the panel's point).
  * Text is printable characters only; a named key goes through `key`. Both are refused while a secret field has focus.
@@ -271,7 +308,20 @@ export interface Target {
   /** Sets the page's device size (CSS width/height, pixel ratio, mobile layout, touch). */
   setViewport?(viewport: Viewport): Promise<void>;
   /** The page's address and title, read cheaply (the live panel's address bar). */
-  location?(): Promise<{ url: string; title: string }>;
+  location?(): Promise<PageLocation>;
+  /**
+   * Sizes the page to the live panel (null: back to the default size). False when the caller set the viewport itself
+   * (browser.session.viewport, or open with a viewport): a size someone asked for is never changed by who watches.
+   */
+  fitToPanel?(fit: PanelFit | null): Promise<boolean>;
+  /** The page as it rests, for the panel to sharpen its picture once frames stop; null when it cannot be taken now. */
+  still?(): Promise<Still | null>;
+  /** Where the automation last clicked. */
+  readonly pointer?: PointerMark | null;
+  /** The page's viewport as the tab holds it, and whether the caller set it. */
+  viewport?(): { width: number; height: number; deviceScaleFactor: number; pinned: boolean };
+  /** How many consumers the tab's screencast has now (a recording holds one). */
+  readonly screencastConsumers?: number;
   /** Input from a person watching in the live panel (managed only; see PanelInput). */
   panelInput?(input: PanelInput): Promise<ActOutcome>;
 }

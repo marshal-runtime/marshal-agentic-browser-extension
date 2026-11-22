@@ -20,7 +20,7 @@ import {
 import { describeTask, statusOf, TaskRegistry, type TaskEntry } from './tasks.js';
 import type { Target } from './target.js';
 import { WATCH_APPLICATION_ID } from './watch/app.js';
-import { WatchRegistry } from './watch/watches.js';
+import { WatchRegistry, type PanelView } from './watch/watches.js';
 
 export const LIFECYCLE_CAPABILITIES = [
   'browser.task.get',
@@ -188,6 +188,7 @@ export class Lifecycle {
         sessionId,
         target: () => this.host.sessionTarget(sessionId),
         task: () => this.runningTaskIn(sessionId),
+        lastTask: () => this.lastTaskIn(sessionId),
       });
       title = 'Browser · live session';
     }
@@ -253,6 +254,15 @@ export class Lifecycle {
     );
   }
 
+  private lastTaskIn(sessionId: string): TaskEntry | null {
+    return (
+      this.tasks
+        .list()
+        .filter((entry) => entry.state === 'finished' && entry.sessionId === sessionId)
+        .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))[0] ?? null
+    );
+  }
+
   private async recordStart(args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const sessionId = stringArg(args, 'sessionId');
     const target = this.host.sessionTarget(sessionId);
@@ -302,13 +312,20 @@ export function defaultArtifactRoot(artifactDir?: string): string {
   return artifactDir ?? path.join(os.tmpdir(), 'marshal-browser', 'artifacts');
 }
 
-/** The panel's picture size in device pixels, or undefined when absent or not a sane size. */
-function viewArg(value: unknown): { width: number; height: number } | undefined {
+/** What the panel says about itself (picture size in device pixels and more), or undefined when not a sane size. */
+function viewArg(value: unknown): PanelView | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
-  const { width, height } = value as Record<string, unknown>;
+  const { width, height, dpr, fit, viewer } = value as Record<string, unknown>;
   const sane = (side: unknown): side is number =>
     typeof side === 'number' && Number.isFinite(side) && side >= 1 && side <= 10_000;
-  return sane(width) && sane(height) ? { width, height } : undefined;
+  if (!sane(width) || !sane(height)) return undefined;
+  return {
+    width,
+    height,
+    ...(typeof dpr === 'number' && Number.isFinite(dpr) && dpr >= 0.25 && dpr <= 8 ? { dpr } : {}),
+    ...(fit === true ? { fit: true } : {}),
+    ...(typeof viewer === 'string' && /^[\w-]{1,64}$/.test(viewer) ? { viewer } : {}),
+  };
 }
 
 function stringArg(args: Record<string, unknown>, key: string): string {

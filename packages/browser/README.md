@@ -57,19 +57,43 @@ and record run there too, but that path is not exercised by these tests.
   else one 1280-wide JPEG taken before its tab closes, at most 400 KB), so a panel opened or re-mounted after the task
   ended shows that picture with the end status (`frame.final: true`); with neither, the task's final screenshot file. `open: false` returns the
   `ui.application.open` input instead; `browser.watch.close` ends a watch.
-- The panel reads like a browser: an address bar (title, URL with the host emphasized, a live dot that blips on each
-  new frame), the picture fitted to both sides of the panel and centered (the panel never scrolls), and a status line
-  that ticks each second ("Live · page idle, last change 12 s ago", the task's step, "Session closed"). Each poll of
-  `browser.watch.frame` carries the picture's size in device pixels (`view`), and the screencast is asked for exactly
-  that size (at most 1920×1200; quality 80, lowered in steps of 10 down to 50 while a frame is over 400 KB), so the
-  browser downsamples once and the panel draws 1:1. Only the frames are resized; the page's own viewport never changes.
-  Chrome never upscales a screencast, so a panel larger than the page (a wide dock on a Retina screen) shows the page's
-  own pixels scaled up. The poll answer also carries `url`, `title`, `lastFrameAt`, `frameBytes`, `quality`,
-  `interactive` and `viewOnly`.
+- The panel is a browser pane. A toolbar on top: back, forward and reload, an address field (a lock, the host
+  emphasized; click it to type an address and press Enter), the page's size, a "fit" switch and a badge saying who
+  drives the page (Live, Agent working, Your Chrome, App, Reconnecting, Ended). Below it only the page, edge to edge.
+  While a task runs the page gets a thin glow, the automation's last click is drawn as a pointer, and a floating line
+  says what it is doing in plain words, with Details and Stop; for a minute after a task ends in a watched session
+  the line shows how it ended (`ended`).
+- **The page follows the pane.** Each poll of `browser.watch.frame` carries `view`: the pane's picture area in device
+  pixels, its `dpr`, `fit` and a `viewer` id. With `fit: true` the extension gives the tab that size
+  (`Emulation.setDeviceMetricsOverride`; one device pixel per CSS pixel, two on a dense screen from ratio 1.5, three
+  from 2.5; 320×240 up to 1920×1600 CSS pixels, a larger pane gets the largest page of its own shape), so the page is
+  laid out for the pane like a browser window being resized, and nothing is letterboxed or cropped. The answer's
+  `page` says what the tab has: `{width, height, deviceScaleFactor, fit, pinned}`. The page keeps its own size, and
+  the panel draws it scaled to fit (never larger than its own pixels), when: the panel's fit switch is off; the caller
+  set a size with `browser.session.viewport` (`pinned`; the panel never changes a size the caller set); something
+  else reads the tab's frames (a recording, a second watch); or another panel already owns the size (one panel owns
+  it while it polls; another takes over 2.5 s after it went quiet). The default 1280×800 is put back when the watch
+  closes or nobody has polled for 15 s. A resize waits for an input already on its way. Screenshots and the decision
+  image keep the pixel size they have when nobody watches (a 2x pane does not double them).
+- The picture. Chrome's screencast sends at most one pixel per CSS pixel as a JPEG (quality 80, lowered in steps of 10
+  down to 50 while a frame is over 400 KB). While the page moves (three frames within 400 ms) those frames are shown
+  as they come. A page at rest is shown as a capture of its own device pixels instead (`frame.sharp`: a PNG up to
+  about 1.2 MB, else a JPEG at quality 92, at most 2.1 MB), so text is crisp, also on a dense screen. A capture makes
+  Chrome send one more frame (its echo); a frame during a capture or within 150 ms after it is not shown, the page is
+  looked at once more instead, and identical bytes end it (a frame of another page size is never taken for an echo).
+  A sharp picture at rest is looked at again every 5 s. No capture is taken while the decision marks are on the page
+  (frames with the marks are not delivered either), while a dialog is open, under a recording, or by a small panel
+  showing a larger page; one Chrome does not answer within 250 ms is given up and frames are shown again. The poll
+  answer also carries `url`, `title`, `loading`, `canGoBack`, `canGoForward`, `pointer` (`{nx, ny, at}`, the
+  automation's last click, for 6 s), `lastFrameAt`, `frameBytes`, `quality`, `interactive` and `viewOnly`.
 - `browser.watch.input({watchId, event})` is how the person uses the page from the panel: `click` and `wheel` (points
   as fractions `nx`, `ny` of the frame, mapped to the page's CSS pixels by the extension), `key` (the same named keys
-  as `press`), `text` (1 to 64 printable characters; pasted text is sent in such pieces) and `back` / `forward` /
-  `reload`. Only for a session on the managed backend that no task drives: a task's watch, a session a task is running
+  as `press`), `text` (1 to 64 printable characters; pasted text is sent in such pieces), `back` / `forward` /
+  `reload`, and `navigate` with the `url` typed in the address field. An address is http or https only: a bare
+  host gets https, a loopback host http; words that are no address, other schemes, credentials in the address and
+  link-local addresses (169.254.x.x, fe80::/10) are refused with `BROWSER_BAD_INPUT` and never sent to a search
+  engine (that refusal is of the obvious, not a network boundary: the tab reaches what `browser.session.open`
+  reaches). Only for a session on the managed backend that no task drives: a task's watch, a session a task is running
   in, the person's own Chrome (`user`) and an app (`app`) are view only (`status: "view_only"`, and the panel says
   why); text and editing keys are refused while a password, one-time-code or card field has focus
   (`status: "secret_field"`); more than 20 inputs a second are refused (`rate_limited`). The typed text is never logged

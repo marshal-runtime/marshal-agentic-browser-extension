@@ -69,7 +69,7 @@ export const STREAM_LIMITS = {
   minWidth: 160,
   minHeight: 120,
   maxWidth: 1920,
-  maxHeight: 1200,
+  maxHeight: 1600,
   /** Requests within this fraction of the running size do not restart the screencast (a panel being dragged). */
   slack: 0.08,
 } as const;
@@ -96,6 +96,69 @@ export function streamSize(view: { readonly width: number; readonly height: numb
     maxWidth: clamp(view.width, STREAM_LIMITS.minWidth, STREAM_LIMITS.maxWidth),
     maxHeight: clamp(view.height, STREAM_LIMITS.minHeight, STREAM_LIMITS.maxHeight),
   };
+}
+
+/** The page sizes a panel may ask for (CSS pixels): a phone-narrow pane up to a large desktop window. */
+export const FIT_LIMITS = {
+  minWidth: 320,
+  minHeight: 240,
+  maxWidth: 1920,
+  maxHeight: 1600,
+} as const;
+
+/**
+ * The page size that fills a panel like a browser pane. `view` is the panel's picture area in device pixels and its
+ * devicePixelRatio. On a high-density screen (ratio 1.5 and up) the page gets two device pixels per CSS pixel, as a
+ * browser window there has (three from 2.5, a phone); otherwise one. Either way the page's device pixels equal the
+ * panel's, so the picture is drawn 1:1, and the page is laid out for the pane's real size (not a fixed desktop size
+ * shrunk into it). A pane larger than the limits gets the largest page of its own shape, which the panel scales up
+ * to fill. Null when the view is not a sane size.
+ */
+export function panelFit(
+  view:
+    | { readonly width: number; readonly height: number; readonly dpr?: number | undefined }
+    | undefined,
+): { width: number; height: number; deviceScaleFactor: 1 | 2 | 3 } | null {
+  if (!view || !(view.width > 0) || !(view.height > 0)) return null;
+  const dpr = view.dpr !== undefined && Number.isFinite(view.dpr) && view.dpr > 0 ? view.dpr : 1;
+  const deviceScaleFactor = dpr >= 2.5 ? 3 : dpr >= 1.5 ? 2 : 1;
+  const width = view.width / deviceScaleFactor;
+  const height = view.height / deviceScaleFactor;
+  // Too large: shrink both sides alike, so the picture still has the pane's shape.
+  const shrink = Math.min(1, FIT_LIMITS.maxWidth / width, FIT_LIMITS.maxHeight / height);
+  return {
+    width: Math.max(FIT_LIMITS.minWidth, Math.round(width * shrink)),
+    height: Math.max(FIT_LIMITS.minHeight, Math.round(height * shrink)),
+    deviceScaleFactor,
+  };
+}
+
+/**
+ * A web address from what a person typed in the panel's address field, or null when it is not one. Only http and
+ * https; a bare host gets https, a loopback host http (a local dev server). Parsing a URL is grammar, not meaning:
+ * words that are no address are refused, never sent to a search engine.
+ */
+export function addressOf(typed: string): string | null {
+  const text = typed.trim();
+  if (!text || text.length > 2_000 || /[\s\p{Cc}]/u.test(text)) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(text)?.[1]?.toLowerCase();
+  const loopback = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(text);
+  let url: URL;
+  try {
+    url = new URL(scheme === undefined ? `${loopback ? 'http' : 'https'}://${text}` : text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  // A host is a name with a dot, a loopback name or an address: "hello" alone is a word, not a site.
+  const host = url.hostname;
+  if (!host || !(host.includes('.') || host === 'localhost' || host.startsWith('['))) return null;
+  if (url.username || url.password) return null;
+  // Link-local addresses (a cloud host's metadata service lives there) are nothing a person browses to. The URL
+  // parser has already normalized every spelling of an IPv4 address (decimal, hex, short) to dotted form. This is a
+  // refusal of the obvious, not a network boundary: the tab reaches what `browser.session.open` reaches.
+  if (/^169\.254\.\d+\.\d+$/.test(host) || /^\[fe[89ab][0-9a-f]:/i.test(host)) return null;
+  return url.href;
 }
 
 /** True when `next` differs from `running` by more than the slack on either side. */

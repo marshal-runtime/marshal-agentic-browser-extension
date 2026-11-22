@@ -109,7 +109,7 @@ export class BrowserService {
   provider(): CapabilityProvider {
     return {
       id: '@marshal/browser',
-      version: '0.2.1',
+      version: '0.3.0',
       list: () => DESCRIPTORS,
       get: (name) => DESCRIPTORS.find((descriptor) => descriptor.name === name),
       invoke: (name, input, context) => this.invoke(name, input, context),
