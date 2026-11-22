@@ -18,7 +18,10 @@ live view and recording are seams, not code yet.
 `decisions_unavailable`, with the trace (`{step, action, rung, ms, actMs, url, confidence, checks, note}`), stats and
 screenshot artifacts.
 
-## Background tasks, live view and recording (managed and user backends)
+## Background tasks, live view and recording
+
+Built and tested on the managed backend. A user-backend tab has the same `screencast` (from the user backend), so watch
+and record run there too, but that path is not exercised by these tests.
 
 - `browser.task` with `wait: false` returns `{taskId, status: "running"}` at once. `browser.task.get` reports its state,
   phase and newest trace step (and the full result once finished), `browser.task.list` lists running and recent tasks
