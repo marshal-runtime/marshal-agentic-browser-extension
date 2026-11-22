@@ -45,16 +45,24 @@
         "userVision": {
           "type": "boolean",
           "description": "Attach a screenshot to decisions on the person's own Chrome (default false: text only, so no picture of their pages goes to the model provider)."
+        },
+        "axHelperPath": {
+          "type": "string",
+          "description": "Absolute path of marshal-ax-helper (the app backend); default dist/native."
+        },
+        "ocrHelperPath": {
+          "type": "string",
+          "description": "Absolute path of marshal-ocr-helper (OCR for apps with thin Accessibility); default dist/native."
         }
       },
       "additionalProperties": false
     }
   },
   "agentGuidance": {
-    "purpose": "One browser for agents: a Chrome it starts with agent (lasting logins), visitor (fresh, observe-only) or offline profiles. A task runs as a code loop where each step is one marshal.models.decide call with a marked screenshot.",
-    "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. on:\"user\" works in the person's own signed-in Chrome. Call browser.status to see which browsers are ready.",
+    "purpose": "One browser for agents: a Chrome it starts (agent, visitor, offline profiles), the person's own Chrome (on:\"user\") or a native macOS app via Accessibility (on:\"app\"). A task is a code loop; each step is one marshal.models.decide call.",
+    "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. on:\"user\" works in the person's own signed-in Chrome. Call browser.status to see what is ready.",
     "recipe": "browser.task {goal, startUrl, want: {data: <JSON schema>, text, screenshot}, values: {name: text to type}} returns {status, data, text, artifacts, trace}. On needs_owner, needs_input or low_confidence, read reason, candidates and the screenshot, then decide yourself.",
-    "boundaries": "Types only the caller's values (names, not values, go to the model). Stops in code on off-site, OAuth, consent, checkout, payment or install links; never offers password fields. The person's own Chrome: background tabs only, text-only decisions unless userVision."
+    "boundaries": "Types only the caller's values. Stops in code on off-site, OAuth, checkout or payment links and typed app signals; never offers password fields. Own Chrome: background tabs, text-only unless userVision. Apps: no real input unless allowRealInput."
   },
   "contributes": {
     "capabilities": [

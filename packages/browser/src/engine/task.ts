@@ -8,7 +8,7 @@
  * The driving agent is rung 3: every stop it cannot settle comes back as a typed status, never a bigger model here.
  */
 import { DecideError, type Decider } from './decider.js';
-import { linkNeedsOwner } from './guards.js';
+import { linkNeedsOwner, signalNeedsOwner } from './guards.js';
 import { actionOf, buildOffers, clip, type Offer } from './offers.js';
 import type { DecideAnswer, DecideImage, DecideQuestion } from '../contracts.js';
 import {
@@ -125,6 +125,10 @@ export interface EngineDeps {
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly settings?: Partial<EngineSettings>;
+  /** Backend wording for the four questions (an app backend says "app window", not "page"); defaults are the browser's. */
+  readonly instructions?: Partial<
+    Record<'nextAction' | 'goalMet' | 'needsOwner' | 'pageReady', string>
+  >;
 }
 
 export const NEXT_ACTION_INSTRUCTIONS =
@@ -268,10 +272,23 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
     const criteria: Record<string, string> = {};
     for (const offer of offers) criteria[offer.action] = offer.description;
     const questions: Record<string, DecideQuestion> = {
-      next_action: { type: 'choice', criteria, instructions: NEXT_ACTION_INSTRUCTIONS },
-      goal_met: { type: 'predicate', instructions: GOAL_MET_INSTRUCTIONS },
-      needs_owner: { type: 'predicate', instructions: NEEDS_OWNER_INSTRUCTIONS },
-      page_ready: { type: 'predicate', instructions: PAGE_READY_INSTRUCTIONS },
+      next_action: {
+        type: 'choice',
+        criteria,
+        instructions: deps.instructions?.nextAction ?? NEXT_ACTION_INSTRUCTIONS,
+      },
+      goal_met: {
+        type: 'predicate',
+        instructions: deps.instructions?.goalMet ?? GOAL_MET_INSTRUCTIONS,
+      },
+      needs_owner: {
+        type: 'predicate',
+        instructions: deps.instructions?.needsOwner ?? NEEDS_OWNER_INSTRUCTIONS,
+      },
+      page_ready: {
+        type: 'predicate',
+        instructions: deps.instructions?.pageReady ?? PAGE_READY_INSTRUCTIONS,
+      },
     };
     let answers: Readonly<Record<string, DecideAnswer>>;
     const began = now();
@@ -417,6 +434,12 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         },
       });
     }
+    if (offer.element && signalNeedsOwner(offer.element, offer.kind)) {
+      record('stop', `typed owner signal: ${offer.element.ownerSignal ?? ''}`);
+      return finish('needs_owner', 'owner_must_decide', {
+        element: { ref: offer.element.ref, label: offer.element.label },
+      });
+    }
     const action = actionOf(offer, values);
     if (!action) {
       record('stop', 'the chosen action cannot be made');
@@ -436,6 +459,14 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
     lowPick = null;
     if (outcome.navigated) navigated = true;
     const label = offer.element?.label ? ` "${clip(offer.element.label, 50)}"` : '';
+    if (!outcome.ok && outcome.needsRealInput) {
+      record('stop', `needs real keyboard/mouse input: ${outcome.error ?? ''}`, actMs);
+      return finish('needs_input', 'real_input_required', {
+        ...(offer.element
+          ? { element: { ref: offer.element.ref, label: offer.element.label } }
+          : {}),
+      });
+    }
     if (!outcome.ok) {
       record('failed', outcome.error, actMs);
       history.push(`${offer.action}${label} -> failed (${clip(outcome.error ?? 'error', 60)})`);
@@ -446,7 +477,8 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
     errors = 0;
     if (offer.kind === 'type') lastTyped = offer.element?.ref ?? null;
     else if (offer.kind === 'submit') lastTyped = null;
-    record('ok', confirmNote, actMs);
+    const inputNote = outcome.realInput ? 'used real keyboard/mouse input' : undefined;
+    record('ok', [confirmNote, inputNote].filter(Boolean).join('; ') || undefined, actMs);
     history.push(`${offer.action}${label}`);
   }
 

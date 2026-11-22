@@ -33,6 +33,11 @@ export interface SnapshotElement {
   readonly options?: readonly { readonly value: string; readonly label: string }[];
   /** Backend-private address of the element (a DOM path for a page, an AX id for an app). */
   readonly node: string;
+  /**
+   * A TYPED signal from the backend that clicking (or submitting) this element is the owner's call, e.g. an app's
+   * window control or the default button of a sheet. Never derived from label words.
+   */
+  readonly ownerSignal?: string;
 }
 
 export interface Snapshot {
@@ -61,6 +66,10 @@ export interface ActOutcome {
   readonly error?: string;
   /** True when the action started a navigation the target waited for. */
   readonly navigated?: boolean;
+  /** The action could only be done with real keyboard/mouse input (or by bringing the app to the front), which was not allowed. */
+  readonly needsRealInput?: boolean;
+  /** The action used real keyboard/mouse input or brought the app to the front (allowed by the caller). */
+  readonly realInput?: boolean;
 }
 
 export interface ScreenshotOptions {

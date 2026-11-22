@@ -1,8 +1,9 @@
 # @marshal/browser
 
 One browser for every Marshal agent: a runtime extension that drives a real Chrome and answers a goal with data, text
-or a screenshot. This is the first slice of the unified design. It has the `managed` backend (Chrome it starts itself);
-the person's own Chrome (`user`, through the browser bridge); native apps (`app`), the live view and recording are seams, not code yet.
+or a screenshot. This is the first slice of the unified design. It has the `managed` backend (Chrome it starts itself),
+the person's own Chrome (`user`, through the browser bridge) and native macOS apps (`app`, through Accessibility); the
+live view and recording are seams, not code yet.
 
 ## Capabilities
 
@@ -80,17 +81,43 @@ caller's invocation context. No second socket is opened, and only the non-evalua
 - **`screencast()`:** forwarded `Page.screencastFrame` frames when the bridge offers `browserbridge.screencast.*` (#4).
   Otherwise one polled screenshot per second.
 
+## The app backend (macOS)
+
+`on: "app"` with `app` (a bundle id such as `com.apple.calculator`, or an app name) runs the same step engine on one app
+window. The Swift helper `native/ax-helper` (a long-lived JSON Lines process, staged into `dist/native` by the build)
+reads the window's Accessibility tree into the same `eN` snapshot and draws the marked window screenshot itself (the
+bundle loads no image library); every decision carries it, as on the managed backend.
+
+- An app that is not running is opened in the background (never activated) and quit when the task or session ends; an
+  app that was already running is driven but never quit. `launch: false` stops with `app_not_running` instead.
+- Actions are Accessibility only: AXPress (or selection), setting a field's value, AXConfirm for `submit`, paging the
+  scroll bar. None moves the pointer or brings the app to the front, and menus (which open on screen) are not read. A
+  step that only real keyboard/mouse input could do stops with `needs_input` / `real_input_required`, unless the caller
+  sets `allowRealInput: true`; then it may activate the app and click or type for real, and the trace says so.
+- Password fields (AXSecureTextField) are never offered and their value is never read. Typed text comes only from
+  `values`.
+- A control stops with `needs_owner` on a typed Accessibility signal, never on its label: window controls
+  (close/minimize/zoom/full screen subroles), the default button of a sheet or dialog, and Enter in a field of such a
+  sheet. Accessibility has no standard "destructive" attribute, so sending, deleting or paying through an ordinary
+  button is the model's `ask_owner` / `needs_owner` answer.
+- `browser.status` reports Accessibility and Screen Recording (each with the reason and the System Settings link when
+  missing), whether the screen is locked (macOS then shows Accessibility clients no windows) and the running apps.
+- With few labelled controls (Electron, canvas apps), the OCR helper `native/ocr-helper` adds the window's text; its
+  lines become click targets only with `allowRealInput`, since a point with no element behind it needs a real click.
+
 ## Configuration
 
 `chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
-`keepStepShots`, `userVision` (see `runtime-extension.json`).
+`keepStepShots`, `userVision`, `axHelperPath`, `ocrHelperPath` (see `runtime-extension.json`).
 
 ## Build and test
 
 ```bash
 npm install
-npm run build      # tsc --noEmit + esbuild -> dist/runtime.cjs
-npx vitest run     # engine (fake decide), units, manifest/bundle allow-list, real Chrome (skipped without Chrome)
+npm run build      # tsc --noEmit + esbuild -> dist/runtime.cjs; on macOS also swift build + stage both helpers
+npx vitest run     # engine (fake decide), app backend (fake helper process), units, manifest/bundle allow-list,
+                   # real Chrome (skipped without Chrome)
+node scripts/mutate-app-guards.mjs   # removes each app guard in turn; every removal must fail a test
 # the user backend over the real bridge in a throwaway Chrome for Testing (skipped without both):
 MB_BRIDGE_REPO=<marley-browser-extension checkout> MB_CHROME_FOR_TESTING=<binary> npx vitest run tests/user.real.test.ts
 ```
