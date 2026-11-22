@@ -6,6 +6,11 @@ const PROFILE = {
   description:
     'agent: lasting profile (logins persist); visitor: fresh, no cookies, observes only; offline: no network (pages we render). Default visitor.',
 } as const;
+const ON_USER = {
+  enum: ['managed', 'user'],
+  description:
+    "user: a background tab in the person's own signed-in Chrome (through the browser bridge; needs url). Default managed.",
+} as const;
 const SESSION_ID = {
   type: 'string',
   description: 'From browser.session.open (or a task run with keepOpen).',
@@ -55,7 +60,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.1.0',
     title: 'Which browsers are available',
     description:
-      "Lists the browser backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome and native apps are planned) and why one is not ready, plus whether marshal.models.decide is offered.",
+      "Lists the browser backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome through the browser bridge, with why it is not paired: extension_missing, no_socket, control_off, not_connected, denied) and whether marshal.models.decide is offered.",
     inputSchema: object({}),
     outputSchema: object({
       ...OK_ERROR,
@@ -71,7 +76,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     title: 'Open a browser session',
     description:
       'Opens a tab in a Chrome this extension starts, optionally at a URL. Returns a sessionId for snapshot / act / screenshot / close. Idle sessions close after 10 minutes.',
-    inputSchema: object({ profile: PROFILE, url: { type: 'string' } }),
+    inputSchema: object({ on: ON_USER, profile: PROFILE, url: { type: 'string' } }),
     outputSchema: object({
       ...OK_ERROR,
       sessionId: { type: 'string' },
@@ -171,8 +176,14 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
         goal: { type: 'string' },
         startUrl: { type: 'string' },
         on: {
-          enum: ['auto', 'managed'],
-          description: 'Backend; only managed exists in this version.',
+          enum: ['auto', 'managed', 'user'],
+          description:
+            "auto (default): the managed Chrome, unless the goal needs the person's own login; then their own Chrome, or needs_owner 'connect your browser' when it is not paired (never another browser). user: the person's own Chrome (needs startUrl).",
+        },
+        needsLogin: {
+          type: 'boolean',
+          description:
+            "For on:auto: whether the goal needs the person's own signed-in session. When absent, one decision call judges it.",
         },
         profile: PROFILE,
         sessionId: SESSION_ID,
@@ -210,6 +221,8 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     outputSchema: object({
       ...OK_ERROR,
       taskId: { type: 'string' },
+      backend: { type: 'string' },
+      userBrowser: { type: 'object' },
       profile: { type: 'string' },
       sessionId: { type: 'string' },
       status: {
@@ -251,6 +264,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       {
         url: { type: 'string' },
         sessionId: SESSION_ID,
+        on: ON_USER,
         profile: PROFILE,
         questions: {
           type: 'object',

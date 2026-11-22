@@ -5,6 +5,7 @@
 import { BrowserService, type BrowserConfiguration } from './capabilities.js';
 import type { RuntimeExtensionActivation, RuntimeExtensionActivationContext } from './contracts.js';
 import { createHostDecider } from './engine/decider.js';
+import { createHostBridge } from './user/bridge.js';
 
 export function activate(
   context: RuntimeExtensionActivationContext<
@@ -16,6 +17,7 @@ export function activate(
     const service = new BrowserService(
       (invocation) => createHostDecider(execute, invocation),
       context.configuration,
+      (invocation) => createHostBridge(execute, invocation),
     );
     return Promise.resolve({
       capabilityProviders: [service.provider()],

@@ -41,6 +41,10 @@
         "keepStepShots": {
           "type": "boolean",
           "description": "Also save every step's marked screenshot as a task artifact (default false)."
+        },
+        "userVision": {
+          "type": "boolean",
+          "description": "Attach a screenshot to decisions on the person's own Chrome (default false: text only, so no picture of their pages goes to the model provider)."
         }
       },
       "additionalProperties": false
@@ -48,9 +52,9 @@
   },
   "agentGuidance": {
     "purpose": "One browser for agents: a Chrome it starts with agent (lasting logins), visitor (fresh, observe-only) or offline profiles. A task runs as a code loop where each step is one marshal.models.decide call with a marked screenshot.",
-    "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. Call browser.status to see which browsers are ready.",
+    "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. on:\"user\" works in the person's own signed-in Chrome. Call browser.status to see which browsers are ready.",
     "recipe": "browser.task {goal, startUrl, want: {data: <JSON schema>, text, screenshot}, values: {name: text to type}} returns {status, data, text, artifacts, trace}. On needs_owner, needs_input or low_confidence, read reason, candidates and the screenshot, then decide yourself.",
-    "boundaries": "Types only the caller's values (their names, not values, go to the model). Stops in code on off-site, OAuth, consent, checkout, payment or install links and never offers password fields. Does not drive the person's own Chrome yet."
+    "boundaries": "Types only the caller's values (names, not values, go to the model). Stops in code on off-site, OAuth, consent, checkout, payment or install links; never offers password fields. The person's own Chrome: background tabs only, text-only decisions unless userVision."
   },
   "contributes": {
     "capabilities": [
