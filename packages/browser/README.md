@@ -18,6 +18,21 @@ live view and recording are seams, not code yet.
 `decisions_unavailable`, with the trace (`{step, action, rung, ms, actMs, url, confidence, checks, note}`), stats and
 screenshot artifacts.
 
+## Background tasks, live view and recording (managed and user backends)
+
+- `browser.task` with `wait: false` returns `{taskId, status: "running"}` at once. `browser.task.get` reports its state,
+  phase and newest trace step (and the full result once finished), `browser.task.list` lists running and recent tasks
+  (kept 30 minutes), `browser.task.cancel` stops it before its next action (an in-flight decision is abandoned, an
+  action already sent runs to its end), closes the tab it opened (even with `keepOpen`) and ends it as `cancelled`.
+- `browser.watch({taskId | sessionId})` opens the extension's `watch` application in the side panel: the page live
+  (the tab's `Page.startScreencast`, running only while the panel polls `browser.watch.frame`), the step the engine is
+  on (action, rung, ms) and a Stop button that calls `browser.task.cancel`. `open: false` returns the
+  `ui.application.open` input instead; `browser.watch.close` ends a watch.
+- `want.video` on `browser.task`, or `browser.session.record.start / stop`, records the tab to an H.264 MP4 (at most
+  10 fps, 15 minutes) with an ffmpeg found through `ffmpegPath`, `MARSHAL_BROWSER_FFMPEG`, the system's, or the one
+  @marshal/hyperframes pins. Without one the call returns status `recorder_unavailable` before anything runs; a video
+  is never silently missing. `browser.status` reports `recorder`.
+
 ## How a step works
 
 1. **Rung 0 (code):** open `startUrl`, snapshot the page (elements get refs `e1..eN`), build the offered actions, take
@@ -108,7 +123,7 @@ bundle loads no image library); every decision carries it, as on the managed bac
 ## Configuration
 
 `chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
-`keepStepShots`, `userVision`, `axHelperPath`, `ocrHelperPath` (see `runtime-extension.json`).
+`keepStepShots`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath` (see `runtime-extension.json`).
 
 ## Build and test
 
@@ -116,7 +131,8 @@ bundle loads no image library); every decision carries it, as on the managed bac
 npm install
 npm run build      # tsc --noEmit + esbuild -> dist/runtime.cjs; on macOS also swift build + stage both helpers
 npx vitest run     # engine (fake decide), app backend (fake helper process), units, manifest/bundle allow-list,
-                   # real Chrome (skipped without Chrome)
+                   # real Chrome (skipped without Chrome), lifecycle/screencast/watch/recorder units, and a real
+                   # Chrome + ffmpeg recording checked with ffprobe (skipped without ffmpeg)
 node scripts/mutate-app-guards.mjs   # removes each app guard in turn; every removal must fail a test
 # the user backend over the real bridge in a throwaway Chrome for Testing (skipped without both):
 MB_BRIDGE_REPO=<marley-browser-extension checkout> MB_CHROME_FOR_TESTING=<binary> npx vitest run tests/user.real.test.ts
