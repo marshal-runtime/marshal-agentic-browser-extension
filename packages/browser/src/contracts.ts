@@ -170,6 +170,8 @@ export interface RuntimeServiceAccessor {
 
 export interface RuntimeExtensionActivation {
   readonly capabilityProviders?: readonly CapabilityProvider[];
+  /** Packaged UI applications (the watch panel); the host serves them by extension id + application id. */
+  readonly uiApplications?: readonly Readonly<Record<string, unknown>>[];
   readonly dispose?: () => MaybePromise<void>;
 }
 

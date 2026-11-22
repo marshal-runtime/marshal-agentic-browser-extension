@@ -1,5 +1,6 @@
 /** Capability descriptors (names, schemas, permissions) for runtime-extension.json's `contributes.capabilities`. */
 import type { CapabilityDescriptor, JsonSchema } from './contracts.js';
+import { LIFECYCLE_DESCRIPTORS, VIDEO_SCHEMA } from './lifecycle-descriptors.js';
 
 const PROFILE = {
   enum: ['agent', 'visitor', 'offline'],
@@ -83,6 +84,10 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       ...OK_ERROR,
       backends: { type: 'array' },
       decide: { type: 'object' },
+      recorder: {
+        type: 'object',
+        description: 'Whether session videos can be made: the ffmpeg in use, or why there is none.',
+      },
       openSessions: { type: 'array' },
     }),
   },
@@ -197,7 +202,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.1.0',
     title: 'Do a browser task',
     description:
-      'Gives a goal ("open X and get me Y") to a code loop: each step one marshal.models.decide call with a marked screenshot picks the action, code guards stop on off-site, sign-in-grant or payment links. Returns status done | needs_input | needs_owner | blocked | low_confidence | budget | decisions_unavailable, the data/text/screenshot asked for in want, and a per-step trace.',
+      'Gives a goal ("open X and get me Y") to a code loop: each step one marshal.models.decide call with a marked screenshot picks the action, code guards stop on off-site, sign-in-grant or payment links. Returns status done | needs_input | needs_owner | blocked | low_confidence | budget | decisions_unavailable | cancelled, the data/text/screenshot asked for in want, and a per-step trace.',
     inputSchema: object(
       {
         goal: { type: 'string' },
@@ -232,7 +237,17 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
           },
           text: { type: 'boolean' },
           screenshot: { type: 'boolean' },
+          video: {
+            type: 'boolean',
+            description:
+              'Record the session as an MP4 (artifact kind video). Refused with recorder_unavailable when no ffmpeg is found.',
+          },
         }),
+        wait: {
+          type: 'boolean',
+          description:
+            'false: return {taskId} at once and run in the background (browser.task.get / cancel / watch). Default true.',
+        },
         bounds: object({ steps: { type: 'number' }, wallMs: { type: 'number' } }),
         allowedSites: {
           type: 'array',
@@ -263,8 +278,14 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
           'low_confidence',
           'budget',
           'decisions_unavailable',
+          'cancelled',
+          'recorder_unavailable',
+          'running',
         ],
       },
+      state: { type: 'string' },
+      video: VIDEO_SCHEMA,
+      videoError: { type: 'string' },
       reason: { type: 'string' },
       data: {},
       text: { type: 'string' },
@@ -317,4 +338,5 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       screenshotPath: { type: 'string' },
     }),
   },
+  ...LIFECYCLE_DESCRIPTORS,
 ];

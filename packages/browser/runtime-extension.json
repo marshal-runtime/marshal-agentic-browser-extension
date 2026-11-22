@@ -23,7 +23,7 @@
         },
         "artifactDir": {
           "type": "string",
-          "description": "Where screenshots are saved; default <tmp>/marshal-browser/artifacts."
+          "description": "Where screenshots and videos are saved; default <tmp>/marshal-browser/artifacts."
         },
         "minConfidence": {
           "type": "number"
@@ -53,6 +53,10 @@
         "ocrHelperPath": {
           "type": "string",
           "description": "Absolute path of marshal-ocr-helper (OCR for apps with thin Accessibility); default dist/native."
+        },
+        "ffmpegPath": {
+          "type": "string",
+          "description": "ffmpeg for session videos; otherwise MARSHAL_BROWSER_FFMPEG, the system's, or the one @marshal/hyperframes pins."
         }
       },
       "additionalProperties": false
@@ -73,7 +77,15 @@
       "browser.session.screenshot",
       "browser.session.close",
       "browser.task",
-      "browser.ask"
+      "browser.ask",
+      "browser.task.get",
+      "browser.task.list",
+      "browser.task.cancel",
+      "browser.watch",
+      "browser.watch.frame",
+      "browser.watch.close",
+      "browser.session.record.start",
+      "browser.session.record.stop"
     ]
   }
 }
