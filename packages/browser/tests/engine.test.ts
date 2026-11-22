@@ -23,11 +23,16 @@ describe('step engine: one decide call per step', () => {
     expect(result.status).toBe('done');
     expect(decider.judged).toHaveLength(2);
     const first = decider.judged[0];
+    // The four step questions, and the plan's questions (plan.ts: what comes after each element action) in the same request.
     expect(Object.keys(first?.questions ?? {}).sort()).toEqual([
+      'after_1',
+      'after_2',
+      'done_after',
       'goal_met',
       'needs_owner',
       'next_action',
       'page_ready',
+      'plan_needs_owner',
     ]);
     expect(first?.questions['goal_met']?.type).toBe('predicate');
     expect(first?.images?.[0]).toEqual({ url: 'data:image/jpeg;base64,AAAA', detail: 'auto' });

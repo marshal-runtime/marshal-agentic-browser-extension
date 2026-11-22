@@ -16,10 +16,11 @@ import type { DecideQuestion } from '../contracts.js';
 import { DecideError, type Decider } from '../engine/decider.js';
 import { describeElement } from '../engine/offers.js';
 import { runTask, type EngineSettings, type TaskInput } from '../engine/task.js';
+import { speedSettings, type SpeedConfiguration } from '../engine/speed-settings.js';
 import { DECISION_SHOT, type Shot, type TargetAction } from '../target.js';
 import { existsSync } from 'fs';
 
-export interface AppConfiguration {
+export interface AppConfiguration extends SpeedConfiguration {
   /** Absolute path of marshal-ax-helper; default dist/native, then the Swift build folder. */
   readonly axHelperPath?: string;
   /** Absolute path of marshal-ocr-helper (OCR for apps whose Accessibility tree is thin). */
@@ -402,6 +403,7 @@ export class AppService {
       ...(configuration.minConfidence ? { minConfidence: configuration.minConfidence } : {}),
       ...(configuration.maxSteps ? { maxSteps: configuration.maxSteps } : {}),
       ...(configuration.wallMs ? { wallMs: configuration.wallMs } : {}),
+      ...speedSettings(configuration),
     };
     try {
       const result = await runTask(

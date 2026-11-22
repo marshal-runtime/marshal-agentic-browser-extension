@@ -67,6 +67,30 @@ and record run there too, but that path is not exercised by these tests.
 4. **Rung 2:** when the goal is met and `want.data` is a JSON schema, one decide call with that schema (and the
    screenshot) extracts the data.
 
+Fewer and overlapping calls (`src/engine/plan.ts`, `values.ts`, `speculate.ts`, `triage.ts`):
+
+- **Plans.** The same decide request also asks, for each element action X, "if the history now ended with X, which
+  action comes right after it?" (`after_N`; on a page with more than 30 element actions only after its fields). Code
+  chains the answers from `next_action` and takes the chained actions without a decision each, stopping at `look`, an
+  answer below 0.6, an action it already has, or when the model says the rest may need the person
+  (`plan_needs_owner`). Before every planned action it takes a fresh snapshot and re-decides instead when the address,
+  the element structure or the planned element changed, or the fresh page no longer offers the action; each planned
+  action runs through exactly the guards above, and a cancel stops a plan between its actions. `planLength` (1-6,
+  default 6; 1 turns plans off).
+- **Values read in code.** For a flat `want.data` schema (at most 6 string or number fields) the page text is sent with
+  numbered lines and the request asks which line holds each field (`value_N`); when the decision confirms the goal,
+  code reads the fields from those lines and no extract is made. A field that is unsure, missing or not a number by
+  its grammar falls back to the extract. `valuePointers` (default true).
+- **Extract beside the decision.** When this look is likely the last one (the goal triage says the start page answers
+  the goal, or the previous plan expected the goal met), the extract starts beside the decision on an unmarked capture
+  and is used only if the decision confirms the goal on that same page. An unused one is counted in
+  `stats.unusedCalls`. `speculativeExtract` (default true).
+- **Parallel awaits.** `on: "auto"` starts the managed Chrome process while the routing question is asked (no tab before
+  the route is known); that routing question and the start-page triage are one request; `browser.ask` reads the
+  snapshot, screenshot and text together; step screenshots are saved beside the decision. Two actions never run at once.
+- `stats.modelCalls` counts every model request of the task, the unused ones included; `stats.plannedActions` the
+  actions taken from a plan.
+
 Models are reached only through the host's `marshal.models.decide` (marshal-sdk, or Marshal desktop when it offers
 it): the extension holds no provider URL, key or model name, and has no Jev dependency.
 
@@ -154,7 +178,7 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 ## Configuration
 
 `chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
-`keepStepShots`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath` (see `runtime-extension.json`).
+`keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath` (see `runtime-extension.json`).
 
 ## Build and test
 

@@ -20,17 +20,19 @@ import type {
 import { DecideError, type Decider } from './engine/decider.js';
 import { describeElement } from './engine/offers.js';
 import { runTask, type EngineSettings, type TaskInput } from './engine/task.js';
+import { speedSettings, type SpeedConfiguration } from './engine/speed-settings.js';
 import { DESCRIPTORS } from './descriptors.js';
 import { defaultArtifactRoot, Lifecycle } from './lifecycle.js';
 import { RecorderUnavailable, type Recording, type VideoResult } from './record/recorder.js';
 import { ABORTED, untilAborted, type TaskEntry } from './tasks.js';
 import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
 import type { BridgeClient } from './user/bridge.js';
-import { goalNeedsLogin, routeTask } from './user/routing.js';
+import { triageGoal, type Triage } from './engine/triage.js';
+import { routeTask } from './user/routing.js';
 import { userBrowserStatus } from './user/status.js';
 import { UserTab } from './user/tab.js';
 
-export interface BrowserConfiguration extends LauncherOptions {
+export interface BrowserConfiguration extends LauncherOptions, SpeedConfiguration {
   readonly artifactDir?: string;
   readonly minConfidence?: number;
   readonly maxSteps?: number;
@@ -426,11 +428,20 @@ export class BrowserService {
       artifacts: [],
     };
     const startUrl = typeof args['startUrl'] === 'string' ? args['startUrl'] : undefined;
+    const profile = profileOf(args['profile'], 'visitor');
+    const wantsData =
+      typeof (args['want'] as Record<string, unknown> | undefined)?.['data'] === 'object';
     let backend: 'managed' | 'user' = existing
       ? existing.tab.backend
       : on === 'user'
         ? 'user'
         : 'managed';
+    // The goal triage (needs_login for routing, start_page_answers for the early extract) is one decide request.
+    // Set inside the routing callback; a holder keeps the type checker from narrowing it to its initial value.
+    const triaged: { request?: Promise<Triage> } = {};
+    // `auto` most often lands on the managed Chrome: its process starts while the routing predicate is asked. No tab is
+    // opened before the route is known, so a goal that needs the person's login never gets a managed tab.
+    if (!existing && on === 'auto') this.launcher.processFor(profile).catch(() => undefined);
     if (!existing && on !== 'managed') {
       // A goal that needs the person's login never runs in another browser (src/user/routing.ts).
       let route;
@@ -441,10 +452,15 @@ export class BrowserService {
           signal,
           routeTask({
             on,
-            needsLogin: () =>
-              typeof args['needsLogin'] === 'boolean'
-                ? Promise.resolve(args['needsLogin'])
-                : goalNeedsLogin(decider, goal, startUrl),
+            needsLogin: () => {
+              if (typeof args['needsLogin'] === 'boolean')
+                return Promise.resolve(args['needsLogin']);
+              triaged.request = triageGoal(decider, goal.trim(), startUrl, {
+                needsLogin: true,
+                startPage: wantsData,
+              });
+              return triaged.request.then((answer) => answer.needsLogin);
+            },
             status: () => userBrowserStatus(bridge),
           }),
         );
@@ -464,6 +480,8 @@ export class BrowserService {
       if ('stop' in route) return { taskId, ...route.stop };
       backend = route.backend;
     }
+    const triage = triaged.request;
+    const startPageAnswers = triage?.then((answer) => answer.startPageAnswers === true);
     // The user tab is opened at startUrl; loading it a second time would only reload the person's page.
     const navigateFirst = backend === 'user' && !existing ? undefined : startUrl;
     const vision =
@@ -527,6 +545,7 @@ export class BrowserService {
             ? { allowedSites: args['allowedSites'].map(String) }
             : {}),
           vision,
+          ...(startPageAnswers ? { startPageAnswers } : {}),
         },
       );
       const artifacts = [...result.artifacts];
@@ -555,6 +574,8 @@ export class BrowserService {
         artifacts,
         ...(video ? { video } : {}),
         ...(videoError ? { videoError } : {}),
+        // The goal triage asked while routing is one more model call of this task.
+        ...(triage ? { stats: { ...result.stats, modelCalls: result.stats.modelCalls + 1 } } : {}),
       };
     } finally {
       task.phase = 'closing';
@@ -686,6 +707,7 @@ export function engineSettings(configuration: BrowserConfiguration): Partial<Eng
       : {}),
     ...(configuration.maxSteps ? { maxSteps: configuration.maxSteps } : {}),
     ...(configuration.wallMs ? { wallMs: configuration.wallMs } : {}),
+    ...speedSettings(configuration),
   };
 }
 

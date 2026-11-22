@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { BrowserService } from '../src/capabilities.js';
+import { ChromeLauncher } from '../src/chrome/launcher.js';
 import { ManagedTab } from '../src/chrome/tab.js';
 import type { DecideMultiInput } from '../src/contracts.js';
 import { DecideError, type Decider } from '../src/engine/decider.js';
@@ -573,8 +574,14 @@ describe("routing: a goal that needs the person's login never runs in another br
     vi.restoreAllMocks();
     await Promise.all(services.splice(0).map((service) => service.dispose()));
   });
-  const managedOpened = (): MockInstance<typeof ManagedTab.open> =>
-    vi.spyOn(ManagedTab, 'open').mockRejectedValue(new Error('MANAGED_OPENED'));
+  // `auto` warms the managed Chrome process beside the routing question (never a tab): stubbed, no Chrome starts here.
+  let warmed: MockInstance<ChromeLauncher['processFor']>;
+  const managedOpened = (): MockInstance<typeof ManagedTab.open> => {
+    warmed = vi
+      .spyOn(ChromeLauncher.prototype, 'processFor')
+      .mockRejectedValue(new Error('NO_CHROME_IN_UNIT_TESTS'));
+    return vi.spyOn(ManagedTab, 'open').mockRejectedValue(new Error('MANAGED_OPENED'));
+  };
   function service(
     decider: Decider,
     bridge: BridgeClient | undefined,
@@ -592,6 +599,27 @@ describe("routing: a goal that needs the person's login never runs in another br
     new FakeBridge({
       'browserbridge.status': () => ({ listening: true, connected: false, browser: null }),
     });
+
+  it('auto warms the managed Chrome process while the routing question is asked, and opens no tab for a login goal', async () => {
+    const spy = managedOpened();
+    let answered = false;
+    const decider = new RoutingDecider(0.93);
+    const judge = decider.judge.bind(decider);
+    decider.judge = async (input) => {
+      // The warm-up was asked for before the routing answer came back.
+      expect(warmed).toHaveBeenCalledTimes(1);
+      const out = await judge(input);
+      answered = true;
+      return out;
+    };
+    await service(decider, unpaired()).invoke('browser.task', {
+      goal: 'read my latest Shopify orders',
+      startUrl: URL,
+    });
+    expect(answered).toBe(true);
+    expect(warmed).toHaveBeenCalledWith('visitor');
+    expect(spy).not.toHaveBeenCalled();
+  });
 
   it('auto + a login goal + Chrome not paired: needs_owner "connect your browser", no managed tab, no user tab', async () => {
     const spy = managedOpened();
