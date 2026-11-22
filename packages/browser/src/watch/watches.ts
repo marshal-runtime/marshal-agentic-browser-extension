@@ -89,12 +89,19 @@ export class WatchRegistry {
    * The panel's poll: the task's state and, when a newer frame exists than `since`, the frame itself. Polling also
    * keeps (or restarts) the screencast.
    */
-  poll(id: string, since?: number): Record<string, unknown> {
-    const watch = this.watches.get(id);
+  poll(id: string | undefined, since?: number): Record<string, unknown> {
+    // Without an id (a panel opened by hand): the newest watch.
+    const watch =
+      id === undefined
+        ? [...this.watches.values()].sort((a, b) => b.createdAt - a.createdAt)[0]
+        : this.watches.get(id);
     if (!watch)
       return {
         ok: false,
-        error: 'BROWSER_NO_WATCH: this watch has ended (open a new one with browser.watch)',
+        error:
+          id === undefined
+            ? 'BROWSER_NO_WATCH: nothing is being watched (start one with browser.watch)'
+            : 'BROWSER_NO_WATCH: this watch has ended (open a new one with browser.watch)',
       };
     watch.lastPoll = this.now();
     this.ensureStream(watch);

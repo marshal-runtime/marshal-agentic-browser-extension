@@ -84,6 +84,10 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       ...OK_ERROR,
       backends: { type: 'array' },
       decide: { type: 'object' },
+      recorder: {
+        type: 'object',
+        description: 'Whether session videos can be made: the ffmpeg in use, or why there is none.',
+      },
       openSessions: { type: 'array' },
     }),
   },

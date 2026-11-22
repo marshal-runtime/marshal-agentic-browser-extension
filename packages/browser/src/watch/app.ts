@@ -26,6 +26,7 @@ const HTML = String.raw`<!doctype html>
     color: var(--foreground, CanvasText);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 100vh; }
   header { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .badge {
@@ -155,11 +156,17 @@ const HTML = String.raw`<!doctype html>
   }
   async function poll() {
     timer = null;
-    if (closed || !watchId || polling) return;
+    if (closed || polling) return;
     if (document.visibilityState === 'hidden') { schedule(1000); return; }
     polling = true;
     try {
-      const state = await call('browser.watch.frame', seq >= 0 ? { watchId, since: seq } : { watchId });
+      const args = watchId ? (seq >= 0 ? { watchId, since: seq } : { watchId }) : {};
+      const state = await call('__FRAME__', args);
+      if (state && typeof state.watchId === 'string' && state.watchId !== watchId) {
+        // Opened without a watch id: follow the newest watch the extension has.
+        watchId = state.watchId;
+        seq = -1;
+      }
       failures = 0;
       if (!state || state.ok === false) {
         setBadge('ended', 'stopped');
@@ -188,7 +195,7 @@ const HTML = String.raw`<!doctype html>
     stop.disabled = true;
     stop.textContent = 'Stopping…';
     try {
-      const result = await call('browser.task.cancel', { taskId });
+      const result = await call('__CANCEL__', { taskId });
       stop.textContent = result && result.ok ? 'Stopped' : 'Stop';
       if (!(result && result.ok)) stop.disabled = false;
     } catch (error) {
@@ -231,6 +238,8 @@ const HTML = String.raw`<!doctype html>
     .then((result) => {
       applyContext(result && result.hostContext);
       parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+      // A panel opened with a watch id gets it in tool-input; one opened by hand follows the newest watch.
+      setTimeout(() => { if (!watchId) schedule(0); }, 400);
     })
     .catch(() => setBadge('not connected', 'failed'));
 })();
@@ -244,28 +253,36 @@ const FRAME_OUTPUT = {
 } as const;
 
 /** The application object `activate` returns in `uiApplications`. */
-export function createWatchApplication(): Record<string, unknown> {
+export function createWatchApplication(
+  capabilities: { readonly frame: string; readonly cancel: string } = {
+    frame: 'browser.watch.frame',
+    cancel: 'browser.task.cancel',
+  },
+): Record<string, unknown> {
+  const html = HTML.replace('__FRAME__', capabilities.frame).replace(
+    '__CANCEL__',
+    capabilities.cancel,
+  );
   return {
     id: WATCH_APPLICATION_ID,
     title: 'Browser · live',
     description:
       'Live view of a @marshal/browser task or session: the page as it changes, the step the engine is on, and a Stop button.',
     renderId: 'marshal-browser-watch',
-    resource: { uri: 'ui://marshal-browser/watch', mimeType: 'text/html', text: HTML },
+    resource: { uri: 'ui://marshal-browser/watch', mimeType: 'text/html', text: html },
     application: {
-      version: '0.2.0',
+      version: '1.0.0',
       presentationModes: ['inline', 'fullscreen'],
       tools: [],
       actions: [
         {
           id: FRAME_ACTION,
-          version: '0.2.0',
+          version: '1.0.0',
           title: 'Read the newest live frame and step',
-          target: { kind: 'capability', capability: 'browser.watch.frame' },
+          target: { kind: 'capability', capability: capabilities.frame },
           inputSchema: {
             type: 'object',
             additionalProperties: false,
-            required: ['watchId'],
             properties: { watchId: { type: 'string' }, since: { type: 'number' } },
           },
           outputSchema: FRAME_OUTPUT,
@@ -276,9 +293,9 @@ export function createWatchApplication(): Record<string, unknown> {
         },
         {
           id: CANCEL_ACTION,
-          version: '0.2.0',
+          version: '1.0.0',
           title: 'Stop the task',
-          target: { kind: 'capability', capability: 'browser.task.cancel' },
+          target: { kind: 'capability', capability: capabilities.cancel },
           inputSchema: {
             type: 'object',
             additionalProperties: false,
@@ -298,5 +315,5 @@ export function createWatchApplication(): Record<string, unknown> {
   };
 }
 
-/** The HTML, exported for tests. */
-export const WATCH_HTML = HTML;
+/** The panel's HTML with the default capability names, for tests. */
+export const WATCH_HTML = String((createWatchApplication()['resource'] as { text: string }).text);

@@ -78,7 +78,8 @@ export class Lifecycle {
       case 'browser.watch':
         return this.watch(args, context);
       case 'browser.watch.frame': {
-        const id = stringArg(args, 'watchId');
+        const id =
+          typeof args['watchId'] === 'string' && args['watchId'] ? args['watchId'] : undefined;
         const since = typeof args['since'] === 'number' ? args['since'] : undefined;
         return this.watches.poll(id, since);
       }

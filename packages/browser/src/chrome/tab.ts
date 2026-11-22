@@ -74,6 +74,9 @@ export class ManagedTab implements Target {
     const tree = await cdp.send('Page.getFrameTree', {}, sessionId);
     const frameId = String((tree['frameTree'] as { frame: { id: string } }).frame.id);
     if (!process.headed) {
+      // Headless Chrome delivers input only to the tab it considers focused: with two tabs open (two sessions, or a
+      // background task beside another), mouse-wheel events to the other one never answer. Every tab acts focused.
+      await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId);
       await cdp.send(
         'Emulation.setDeviceMetricsOverride',
         { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false },

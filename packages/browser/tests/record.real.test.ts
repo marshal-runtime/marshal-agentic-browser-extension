@@ -35,7 +35,11 @@ beforeAll(async () => {
   server = http.createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end(
-      request.url === '/two' ? '<!doctype html><title>Two</title><h1>Second page</h1>' : TICKER,
+      request.url === '/two'
+        ? '<!doctype html><title>Two</title><h1>Second page</h1>'
+        : request.url === '/tall'
+          ? `<!doctype html><title>Tall</title>${'<p>A long page to scroll.</p>'.repeat(400)}`
+          : TICKER,
     );
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -48,15 +52,18 @@ afterAll(async () => {
   await rm(artifactDir, { recursive: true, force: true });
 });
 
-/** Processes whose command line contains `needle` (excluding this pgrep). */
+/**
+ * Processes whose command line contains `needle` and that this test started (parent is this process) or left
+ * behind (re-parented to launchd/init). Other managed Chromes on the machine (another Marshal host) are not ours.
+ */
 function processes(needle: string): string[] {
-  try {
-    return execFileSync('pgrep', ['-fl', needle], { encoding: 'utf8' })
-      .split('\n')
-      .filter((line) => line.trim() && !line.includes('pgrep'));
-  } catch {
-    return [];
-  }
+  return execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' })
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length > 2)
+    .filter(([, ppid]) => Number(ppid) === process.pid || Number(ppid) === 1)
+    .map((parts) => parts.join(' '))
+    .filter((line) => line.includes(needle));
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -219,12 +226,40 @@ describe.skipIf(!chrome.path)('screencast, recording and cancel (real Chrome)', 
     }
   }, 90_000);
 
+  it('two tabs at once both take input (headless focus)', async () => {
+    const launcher = new ChromeLauncher();
+    try {
+      // A smoke check of two tabs taking input at once. The hang that Emulation.setFocusEmulationEnabled fixes
+      // (tab B's mouse-wheel never answered) reproduced against en.wikipedia.org pages, not this local fixture,
+      // so this test does not by itself fail without the fix.
+      const a = await ManagedTab.open(launcher, 'visitor');
+      await a.act({ kind: 'navigate', url: `${base}/tall` });
+      const b = await ManagedTab.open(launcher, 'visitor');
+      await b.act({ kind: 'navigate', url: `${base}/tall` });
+      const both = await Promise.all([
+        a.act({ kind: 'scroll', direction: 'down' }),
+        b.act({ kind: 'scroll', direction: 'down' }),
+      ]);
+      expect(both).toEqual([{ ok: true }, { ok: true }]);
+      await a.close();
+      await b.close();
+    } finally {
+      await launcher.closeAll();
+    }
+  }, 60_000);
+
   it('leaves no Chrome or ffmpeg process behind', async () => {
-    await sleep(500);
+    // Another test file's Chrome, shutting down in parallel, can sit re-parented to launchd for a moment: wait for
+    // the exits to finish (up to 10 s) instead of judging one snapshot. A real orphan stays and fails.
     const userDataDir = path.join(os.tmpdir(), 'marshal-browser-');
-    expect(processes(`user-data-dir=${userDataDir}`)).toEqual([]);
-    expect(processes('concat -safe 0')).toEqual([]);
-  });
+    let left: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      left = [...processes(`user-data-dir=${userDataDir}`), ...processes('concat -safe 0')];
+      if (left.length === 0) break;
+      await sleep(500);
+    }
+    expect(left).toEqual([]);
+  }, 30_000);
 });
 
 export { el };

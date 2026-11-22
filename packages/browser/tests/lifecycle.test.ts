@@ -466,6 +466,26 @@ describe('watch registry', () => {
     expect(watches.poll(id)).toMatchObject({ ok: false });
     await watches.dispose();
   });
+
+  it('a poll without a watch id follows the newest watch, and says when there is none', async () => {
+    let now = 1_000;
+    const watches = new WatchRegistry(() => now);
+    expect(watches.poll(undefined)).toMatchObject({ ok: false });
+    expect(String(watches.poll(undefined)['error'])).toContain('nothing is being watched');
+    const registry = new TaskRegistry(() => now);
+    const hold = (goal: string): ReturnType<TaskRegistry['start']> =>
+      registry.start(goal, (task) => {
+        task.target = new CastTarget(pages);
+        return new Promise(() => undefined);
+      });
+    const older = watches.open({ kind: 'task', entry: hold('older') });
+    now += 5;
+    const newer = watches.open({ kind: 'task', entry: hold('newer') });
+    expect(watches.poll(undefined)).toMatchObject({ ok: true, watchId: newer, goal: 'newer' });
+    await watches.close(newer);
+    expect(watches.poll(undefined)).toMatchObject({ ok: true, watchId: older, goal: 'older' });
+    await watches.dispose();
+  });
 });
 
 describe('recorder', () => {

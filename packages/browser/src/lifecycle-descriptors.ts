@@ -129,8 +129,8 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.2.0',
     title: 'Newest live frame of a watch',
     description:
-      "The watch panel's poll: the task's state and newest step plus the newest JPEG frame (base64) when it is newer than `since`. Meant for the panel; agents use browser.task.get.",
-    inputSchema: object({ watchId: { type: 'string' }, since: { type: 'number' } }, ['watchId']),
+      "The watch panel's poll: the task's state and newest step plus the newest JPEG frame (base64) when it is newer than `since`; without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
+    inputSchema: object({ watchId: { type: 'string' }, since: { type: 'number' } }),
     outputSchema: {
       type: 'object',
       properties: {
