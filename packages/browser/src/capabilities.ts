@@ -15,11 +15,15 @@ import type {
   CapabilityProvider,
   DecideQuestion,
   InvocationContext,
+  RuntimeExecuteFn,
 } from './contracts.js';
 import { DecideError, type Decider } from './engine/decider.js';
 import { describeElement } from './engine/offers.js';
 import { runTask, type EngineSettings, type TaskInput } from './engine/task.js';
 import { DESCRIPTORS } from './descriptors.js';
+import { defaultArtifactRoot, Lifecycle } from './lifecycle.js';
+import { RecorderUnavailable, type Recording, type VideoResult } from './record/recorder.js';
+import type { TaskEntry } from './tasks.js';
 import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
 import type { BridgeClient } from './user/bridge.js';
 import { goalNeedsLogin, routeTask } from './user/routing.js';
@@ -38,6 +42,8 @@ export interface BrowserConfiguration extends LauncherOptions {
   /** The app backend's helper binaries (default: dist/native, then the Swift build folders). */
   readonly axHelperPath?: string;
   readonly ocrHelperPath?: string;
+  /** ffmpeg for recordings (otherwise MARSHAL_BROWSER_FFMPEG, the system's, or the one @marshal/hyperframes pins). */
+  readonly ffmpegPath?: string;
 }
 
 const IDLE_MS = 10 * 60_000;
@@ -57,12 +63,15 @@ export class BrowserService {
   private readonly sweeper: ReturnType<typeof setInterval>;
   /** The `app` backend (native macOS apps): owns every `on: "app"` call and every app session id. */
   private readonly apps: AppService;
+  /** Task lifecycle, live view and recording (src/lifecycle.ts). */
+  readonly lifecycle: Lifecycle;
 
   constructor(
     private readonly deciderFor: (context?: InvocationContext) => Decider,
     private readonly configuration: BrowserConfiguration = {},
     private readonly bridgeFor?: (context?: InvocationContext) => BridgeClient,
     appDeps: Partial<AppServiceDeps> = {},
+    execute?: RuntimeExecuteFn,
   ) {
     this.launcher = new ChromeLauncher(configuration);
     this.apps = new AppService({
@@ -70,6 +79,17 @@ export class BrowserService {
       configuration,
       save: (shot, folder, label) => this.save(shot, folder, label),
       ...appDeps,
+    });
+    this.lifecycle = new Lifecycle({
+      sessionTarget: (id) => {
+        const session = this.sessions.get(id);
+        if (!session || session.tab.isClosed) return null;
+        session.lastUsed = Date.now();
+        return session.tab;
+      },
+      artifactRoot: () => defaultArtifactRoot(configuration.artifactDir),
+      ...(execute ? { execute } : {}),
+      ...(configuration.ffmpegPath ? { ffmpegPath: configuration.ffmpegPath } : {}),
     });
     this.sweeper = setInterval(() => {
       void this.sweep();
@@ -90,6 +110,7 @@ export class BrowserService {
 
   async dispose(): Promise<void> {
     clearInterval(this.sweeper);
+    await this.lifecycle.dispose();
     const all = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.all(all.map((session) => session.tab.close().catch(() => undefined)));
@@ -109,6 +130,8 @@ export class BrowserService {
     const decider = this.deciderFor(context);
     const bridge = this.bridgeFor?.(context);
     try {
+      if (this.lifecycle.handles(name))
+        return { output: await this.lifecycle.invoke(name, args, context) };
       const forApp = args['on'] === 'app' || this.apps.owns(args['sessionId']);
       if (forApp && name !== 'browser.status')
         return { output: await this.invokeApp(name, args, decider) };
@@ -193,6 +216,7 @@ export class BrowserService {
         await this.apps.readiness(),
       ],
       decide,
+      recorder: await this.lifecycle.recorderStatus(),
       openSessions: [
         ...[...this.sessions.values()].map((session) => ({
           sessionId: session.id,
@@ -355,6 +379,40 @@ export class BrowserService {
       };
     }
     const existing = typeof args['sessionId'] === 'string' ? this.session(args, bridge) : null;
+    const want = (args['want'] ?? {}) as TaskInput['want'];
+    if (want?.video) {
+      // A task that asked for a video never runs without a recorder (no silent missing video).
+      const recorder = await this.lifecycle.recorderStatus();
+      if (!recorder.available)
+        return {
+          ok: false,
+          status: 'recorder_unavailable',
+          reason: 'recorder_unavailable',
+          error: `recorder_unavailable: ${recorder.detail}`,
+        };
+    }
+    const entry = this.lifecycle.tasks.start(goal.trim(), (task) =>
+      this.runTracked(task, args, decider, bridge, on, existing, want),
+    );
+    if (args['wait'] === false)
+      return { ok: true, taskId: entry.id, state: 'running', status: 'running' };
+    return entry.done;
+  }
+
+  /** One registered task: opens what it needs, records if asked, runs the engine, closes what it opened. */
+  private async runTracked(
+    task: TaskEntry,
+    args: Record<string, unknown>,
+    decider: Decider,
+    bridge: BridgeClient | undefined,
+    on: 'auto' | 'managed' | 'user',
+    existing: Session | null,
+    want: TaskInput['want'],
+  ): Promise<Record<string, unknown>> {
+    const taskId = task.id;
+    const signal = task.controller.signal;
+    const keepOpen = args['keepOpen'] === true;
+    const goal = String(args['goal']).trim();
     const startUrl = typeof args['startUrl'] === 'string' ? args['startUrl'] : undefined;
     let backend: 'managed' | 'user' = existing
       ? existing.tab.backend
@@ -370,13 +428,14 @@ export class BrowserService {
           needsLogin: () =>
             typeof args['needsLogin'] === 'boolean'
               ? Promise.resolve(args['needsLogin'])
-              : goalNeedsLogin(decider, goal.trim(), startUrl),
+              : goalNeedsLogin(decider, goal, startUrl),
           status: () => userBrowserStatus(bridge),
         });
       } catch (error) {
         if (error instanceof DecideError)
           return {
             ok: true,
+            taskId,
             status: error.unavailable ? 'decisions_unavailable' : 'blocked',
             reason: error.message,
             trace: [],
@@ -384,15 +443,10 @@ export class BrowserService {
           };
         throw error;
       }
-      if ('stop' in route) return route.stop;
+      if ('stop' in route) return { taskId, ...route.stop };
       backend = route.backend;
     }
-    const session =
-      existing ??
-      (backend === 'user'
-        ? await this.openUserTab(bridge, startUrl)
-        : await this.openTab(profileOf(args['profile'], 'visitor')));
-    // The user tab was just opened at startUrl; loading it a second time would only reload the person's page.
+    // The user tab is opened at startUrl; loading it a second time would only reload the person's page.
     const navigateFirst = backend === 'user' && !existing ? undefined : startUrl;
     const vision =
       backend === 'user'
@@ -400,9 +454,9 @@ export class BrowserService {
         : typeof args['vision'] === 'boolean'
           ? args['vision']
           : (this.configuration.vision ?? true);
-    const taskId = randomUUID();
+    let session: Session | null = existing;
+    let recording: Recording | null = null;
     const bounds = (args['bounds'] ?? {}) as Record<string, unknown>;
-    const want = (args['want'] ?? {}) as TaskInput['want'];
     const settings: Partial<EngineSettings> = {
       ...(this.configuration.minConfidence
         ? { minConfidence: this.configuration.minConfidence }
@@ -411,6 +465,36 @@ export class BrowserService {
       ...(this.configuration.wallMs ? { wallMs: this.configuration.wallMs } : {}),
     };
     try {
+      if (signal.aborted)
+        return {
+          ok: true,
+          taskId,
+          status: 'cancelled',
+          reason: 'cancelled_by_caller',
+          trace: [],
+          artifacts: [],
+        };
+      session ??=
+        backend === 'user'
+          ? await this.openUserTab(bridge, startUrl)
+          : await this.openTab(profileOf(args['profile'], 'visitor'));
+      task.target = session.tab;
+      if (existing || keepOpen) task.sessionId = session.id;
+      if (want?.video && !signal.aborted) {
+        try {
+          recording = await this.lifecycle.startTaskVideo(session.tab, taskId);
+        } catch (error) {
+          if (error instanceof RecorderUnavailable)
+            return {
+              ok: false,
+              taskId,
+              status: 'recorder_unavailable',
+              reason: 'recorder_unavailable',
+              error: error.message,
+            };
+          throw error;
+        }
+      }
       const result = await runTask(
         {
           target: session.tab,
@@ -418,9 +502,17 @@ export class BrowserService {
           saveShot: (shot, label) => this.save(shot, taskId, label),
           keepStepShots: this.configuration.keepStepShots === true,
           settings,
+          signal,
+          onTrace: (step) => {
+            task.lastStep = step;
+            task.steps = Math.max(task.steps, step.step);
+          },
+          onPhase: (phase) => {
+            task.phase = phase;
+          },
         },
         {
-          goal: goal.trim(),
+          goal,
           ...(navigateFirst ? { startUrl: navigateFirst } : {}),
           values: stringRecord(args['values']),
           ...(want ? { want } : {}),
@@ -432,7 +524,22 @@ export class BrowserService {
           vision,
         },
       );
-      const keep = existing !== null || args['keepOpen'] === true;
+      const artifacts = [...result.artifacts];
+      let video: VideoResult | undefined;
+      let videoError: string | undefined;
+      if (recording) {
+        const ending = recording;
+        recording = null;
+        task.phase = 'closing';
+        try {
+          video = await this.lifecycle.stopVideo(ending);
+          artifacts.push({ kind: 'video', path: video.path, label: 'session' });
+        } catch (error) {
+          videoError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      // A cancelled task closes what it opened, even when it was asked to keep it open.
+      const keep = existing !== null || (keepOpen && result.status !== 'cancelled');
       return {
         ok: true,
         taskId,
@@ -440,12 +547,19 @@ export class BrowserService {
         profile: session.profile,
         ...(keep ? { sessionId: session.id } : {}),
         ...result,
+        artifacts,
+        ...(video ? { video } : {}),
+        ...(videoError ? { videoError } : {}),
       };
     } finally {
-      session.lastUsed = Date.now();
-      if (!existing && args['keepOpen'] !== true) {
-        this.sessions.delete(session.id);
-        await session.tab.close();
+      task.phase = 'closing';
+      if (recording) await this.lifecycle.abortVideo(recording);
+      if (session) {
+        session.lastUsed = Date.now();
+        if (!existing && (!keepOpen || signal.aborted)) {
+          this.sessions.delete(session.id);
+          await session.tab.close();
+        }
       }
     }
   }

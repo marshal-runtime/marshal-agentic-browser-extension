@@ -5,6 +5,7 @@
  */
 import { DEAD_PROXY, sleep, type ChromeLauncher, type ChromeProcess } from './launcher.js';
 import type { CdpConnection } from './cdp.js';
+import { ScreencastHub } from './screencast.js';
 import { SNAPSHOT_SCRIPT } from '../page/snapshot-script.js';
 import {
   asExpression,
@@ -21,6 +22,9 @@ import { isRawSnapshot, toSnapshot } from '../page/to-snapshot.js';
 import type {
   ActOutcome,
   ManagedProfile,
+  ScreencastFrameMeta,
+  ScreencastHandle,
+  ScreencastOptions,
   ScreenshotOptions,
   Shot,
   Snapshot,
@@ -35,6 +39,7 @@ export class ManagedTab implements Target {
   readonly backend = 'managed';
   private last: Snapshot | null = null;
   private closed = false;
+  private hub: ScreencastHub | null = null;
 
   private constructor(
     readonly profile: ManagedProfile,
@@ -325,6 +330,21 @@ export class ManagedTab implements Target {
     return typeof text === 'string' ? text : '';
   }
 
+  /** Live JPEG frames over the same CDP pipe; Chrome screencasts only while at least one handle is open. */
+  async screencast(
+    opts: ScreencastOptions,
+    onFrame: (jpegBase64: string, meta: ScreencastFrameMeta) => void,
+  ): Promise<ScreencastHandle> {
+    if (this.isClosed) throw new Error('BROWSER_SCREENCAST_FAILED: the tab is closed');
+    this.hub ??= new ScreencastHub(this.cdp, this.sessionId);
+    return this.hub.subscribe(opts, onFrame);
+  }
+
+  /** True while Chrome is screencasting this tab (tests check it ends with the last consumer). */
+  get screencasting(): boolean {
+    return this.hub?.active ?? false;
+  }
+
   async cookies(): Promise<readonly { readonly name: string; readonly domain: string }[]> {
     const answer = await this.send('Network.getCookies');
     return (answer['cookies'] as { name: string; domain: string }[] | undefined) ?? [];
@@ -333,6 +353,7 @@ export class ManagedTab implements Target {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    await this.hub?.dispose();
     if (this.cdp.closed) return;
     await this.cdp
       .send('Target.closeTarget', { targetId: this.targetId }, undefined, 5_000)

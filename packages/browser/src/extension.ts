@@ -6,6 +6,7 @@ import { BrowserService, type BrowserConfiguration } from './capabilities.js';
 import type { RuntimeExtensionActivation, RuntimeExtensionActivationContext } from './contracts.js';
 import { createHostDecider } from './engine/decider.js';
 import { createHostBridge } from './user/bridge.js';
+import { createWatchApplication } from './watch/app.js';
 
 export function activate(
   context: RuntimeExtensionActivationContext<
@@ -18,9 +19,12 @@ export function activate(
       (invocation) => createHostDecider(execute, invocation),
       context.configuration,
       (invocation) => createHostBridge(execute, invocation),
+      {},
+      execute,
     );
     return Promise.resolve({
       capabilityProviders: [service.provider()],
+      uiApplications: [createWatchApplication()],
       dispose: () => service.dispose(),
     });
   } catch (error) {
