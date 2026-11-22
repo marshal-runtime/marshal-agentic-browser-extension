@@ -48,6 +48,10 @@ export interface BrowserConfiguration extends LauncherOptions, SpeedConfiguratio
   readonly ocrHelperPath?: string;
   /** ffmpeg for recordings (otherwise MARSHAL_BROWSER_FFMPEG, the system's, or the one @marshal/hyperframes pins). */
   readonly ffmpegPath?: string;
+  /** Loopback port of the bridge the person's Chrome connects to (default 17373). */
+  readonly bridgePort?: number;
+  /** Stable folder the carried Chrome extension is copied to for Load unpacked (default ~/.marshal/browser/chrome-extension). */
+  readonly chromeExtensionDir?: string;
 }
 
 const IDLE_MS = 10 * 60_000;

@@ -7,3 +7,4 @@ build/
 *.png
 *.d.ts.map
 *.js.map
+packages/browser/vendor/

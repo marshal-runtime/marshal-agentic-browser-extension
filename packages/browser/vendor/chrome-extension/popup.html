@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px/1.4 system-ui, sans-serif; width: 300px; margin: 0; padding: 14px; color: #1f1f1f; }
+      h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #d97706; }
+      .dot.on { background: #7c3aed; }
+      .dot.off { background: #888; }
+      label.toggle { display: flex; gap: 8px; align-items: center; margin: 10px 0; font-weight: 600; }
+      .muted { color: #666; font-size: 12px; }
+      ul { padding-left: 16px; margin: 6px 0; max-height: 140px; overflow: auto; }
+      li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      details { margin-top: 10px; }
+      input[type="text"] { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span>Marley</h1>
+    <div id="status" class="muted">Checking…</div>
+    <div id="cloud" class="muted" style="margin-top:6px"></div>
+    <button id="unpair" hidden style="margin-top:6px">Unpair from Marley</button>
+    <label class="toggle"><input id="enabled" type="checkbox" /> Let Marley use this browser</label>
+    <div class="muted">Marley works only in tabs of the purple “Marley” group. Drag a tab out of the group to take it back.</div>
+    <div id="tabs"></div>
+    <!-- store:strip-start -->
+    <details>
+      <summary class="muted">Developer: Marshal bridge</summary>
+      <div class="muted">Only for an unpacked install used with Marshal. Leave empty otherwise. Example: ws://127.0.0.1:17373/bridge</div>
+      <input id="bridgeUrl" type="text" spellcheck="false" placeholder="empty: off" />
+    </details>
+    <!-- store:strip-end -->
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

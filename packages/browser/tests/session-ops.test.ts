@@ -3,7 +3,7 @@
  * scripted bridge (keys, history, unsupported kinds, the secret-field rule), the typed setup when that Chrome is not
  * paired, and the backend-neutral operations over a fake target (wait, read, evaluate/log/dialog refusals).
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -73,7 +73,7 @@ class FakeBridge implements BridgeClient {
   call<T>(name: string, input: Record<string, unknown>): Promise<T> {
     this.calls.push({ name, input });
     const handler = this.handlers[name];
-    if (!handler) return Promise.reject(new BridgeError('extension_missing', `${name} missing`));
+    if (!handler) return Promise.reject(new BridgeError('unsupported', `${name} missing`));
     try {
       return Promise.resolve(handler(input) as T);
     } catch (error) {
@@ -248,11 +248,10 @@ describe("the person's own Chrome (user backend) through the bridge", () => {
 
 describe("setup: how to connect the person's Chrome", () => {
   const reasons: Exclude<UserBrowserReason, 'paired'>[] = [
-    'extension_missing',
+    'port_in_use',
     'no_socket',
     'control_off',
     'not_connected',
-    'denied',
     'error',
   ];
 
@@ -264,25 +263,37 @@ describe("setup: how to connect the person's Chrome", () => {
       expect(setup.storeListing).toBeNull();
     }
     expect((await userBrowserStatus(new FakeBridge())).setup).toBeUndefined();
-    expect((await userBrowserStatus(undefined)).setup?.reason).toBe('extension_missing');
+    expect((await userBrowserStatus(undefined)).setup?.reason).toBe('no_socket');
   });
 
-  it('not_connected names the developer install, the bridge address and the switch; the website copy is said not to connect', () => {
+  it('not_connected names the carried folder by its absolute path, the bridge address and the switch; website and store copies are said not to connect', () => {
     const setup = setupFor('not_connected');
+    const folder = setup.chromeExtension.folder;
+    expect(folder && path.isAbsolute(folder)).toBe(true);
+    expect(existsSync(path.join(String(folder), 'manifest.json'))).toBe(true);
     const text = setup.steps.join('\n');
     expect(text).toContain('chrome://extensions');
-    expect(text).toContain('Load unpacked');
+    expect(text).toContain('Developer mode');
+    expect(text).toContain(`Load unpacked and pick this folder: ${String(folder)}`);
     expect(text).toContain(BRIDGE_ADDRESS);
     expect(text).toContain('Let Marley use this browser');
     expect(setup.chromeExtension).toMatchObject({
       repository: 'https://github.com/zyg-edge/marley-browser-extension',
-      folder: 'chrome-extension',
       install: 'developer (Load unpacked)',
+      version: '0.5.0',
+      commit: '48cf63fb02b6533750bd114a7ae381cff2ce839b',
     });
+    expect(setup.otherInstalls).toMatch(/Chrome Web Store/);
+    expect(setup.otherInstalls).toMatch(/never to Marshal/);
     expect(setup.websiteInstall.url).toBe(WEBSITE_INSTALL);
     expect(setup.websiteInstall.note).toMatch(/does not connect this Marshal/);
-    // extension_missing also installs Marshal's own bridge first.
-    expect(setupFor('extension_missing').steps[0]).toContain('@zygstinct/browser-bridge');
+    // A port configured elsewhere is the address the steps name.
+    const other = setupFor('not_connected', { url: 'ws://127.0.0.1:17999/bridge', port: 17999 });
+    expect(other.steps.join('\n')).toContain('ws://127.0.0.1:17999/bridge');
+    // No carried folder (a broken install): the first step says so.
+    expect(setupFor('not_connected', undefined, { folder: null }).steps[0]).toMatch(
+      /carries no Chrome extension/,
+    );
   });
 
   it('browser.status, a refused on:"user" session and a refused task all carry the setup', async () => {

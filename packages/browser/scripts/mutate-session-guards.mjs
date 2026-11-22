@@ -113,7 +113,7 @@ const MUTATIONS = [
   {
     name: 'status: no setup when not ready',
     file: 'src/user/status.ts',
-    from: '    setup: setupFor(reason),\n',
+    from: '    setup: setupFor(reason, status, carried),\n',
     to: '',
     tests: [UNIT],
   },
@@ -183,8 +183,146 @@ MUTATIONS.push({
   tests: [REAL],
 });
 
+// The carried bridge to the person's Chrome (src/user/local-bridge.ts) and the carried Chrome extension.
+const BRIDGE = 'tests/local-bridge.test.ts';
+const CARRIED = 'tests/carried-extension.test.ts';
+MUTATIONS.push(
+  {
+    name: 'bridge: any Origin may connect',
+    file: 'src/user/local-bridge.ts',
+    from: "acceptOrigin: (origin) => origin.startsWith('chrome-extension://'),",
+    to: 'acceptOrigin: () => true,',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: listens on every interface',
+    file: 'src/user/local-bridge.ts',
+    from: "const HOST = '127.0.0.1';",
+    to: "const HOST = '0.0.0.0';",
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: port taken is not port_in_use',
+    file: 'src/user/local-bridge.ts',
+    from: "code === 'EADDRINUSE'",
+    to: 'false',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: old bridge extension not named as holder',
+    file: 'src/user/local-bridge.ts',
+    from: "service === 'marley-browser-bridge'",
+    to: "service === 'nobody'",
+    tests: [BRIDGE],
+  },
+  {
+    name: 'status: port_in_use folded into no_socket',
+    file: 'src/user/status.ts',
+    from: "if (status.bindError?.code === 'port_in_use')",
+    to: 'if (false as boolean)',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: never binds again after the holder leaves',
+    file: 'src/user/local-bridge.ts',
+    from: 'if (Date.now() - this.lastBindAt < (this.options.rebindEveryMs ?? REBIND_EVERY_MS)) return;',
+    to: 'return;',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: binds again on every status',
+    file: 'src/user/local-bridge.ts',
+    from: 'if (Date.now() - this.lastBindAt < (this.options.rebindEveryMs ?? REBIND_EVERY_MS)) return;',
+    to: '',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: older browser kept open',
+    file: 'src/user/local-bridge.ts',
+    from: "if (previous) previous.close(4000, 'replaced by a newer browser connection');",
+    to: '',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: evaluate verb offered',
+    file: 'src/user/local-bridge.ts',
+    from: "'browserbridge.wait': { method: 'wait', timeoutMs: 65_000 },",
+    to: "'browserbridge.wait': { method: 'wait', timeoutMs: 65_000 },\n  'browserbridge.evaluate': { method: 'evaluate' },",
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: any URL opened',
+    file: 'src/user/local-bridge.ts',
+    from: 'if (!history && !/^https?:\\/\\//i.test(url))',
+    to: 'if (false as boolean)',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: tabId not checked',
+    file: 'src/user/local-bridge.ts',
+    from: "if (input['tabId'] !== undefined && !Number.isInteger(input['tabId']))",
+    to: 'if (false as boolean)',
+    tests: [BRIDGE],
+  },
+  {
+    name: 'bridge: screenshot file readable by others',
+    file: 'src/user/local-bridge.ts',
+    from: "writeFileSync(file, Buffer.from(data, 'base64'), { mode: 0o600 });",
+    to: "writeFileSync(file, Buffer.from(data, 'base64'));",
+    tests: [BRIDGE],
+  },
+  {
+    name: 'carried extension: site build accepted',
+    file: 'scripts/sync-chrome-extension.mjs',
+    from: 'if (!channel.includes(DEVELOPER_CHANNEL))',
+    to: 'if (false)',
+    tests: [CARRIED],
+  },
+  {
+    name: 'carried extension: store build (update_url) accepted',
+    file: 'scripts/sync-chrome-extension.mjs',
+    from: "if ('update_url' in manifest)",
+    to: 'if (false)',
+    tests: [CARRIED],
+  },
+  {
+    name: 'carried extension: links accepted',
+    file: 'scripts/sync-chrome-extension.mjs',
+    from: 'if (stat.isSymbolicLink()) throw new Error(`${rel} is a symbolic link`);',
+    to: 'if (stat.isSymbolicLink()) out.push(rel);',
+    tests: [CARRIED],
+  },
+);
+
+MUTATIONS.push(
+  {
+    name: 'carried folder: link at the target followed',
+    file: 'src/user/carried-folder.ts',
+    from: 'if (existsSync(entry) && lstatSync(entry).isSymbolicLink())',
+    to: 'if (false as boolean)',
+    tests: [CARRIED],
+  },
+  {
+    name: 'carried folder: copied without checking the lock',
+    file: 'src/user/carried-folder.ts',
+    from: 'if (!matches(source.folder, lock))',
+    to: 'if (false as boolean)',
+    tests: [CARRIED],
+  },
+  {
+    name: 'carried folder: rewritten on every activation',
+    file: 'src/user/carried-folder.ts',
+    from: 'if (!matches(target, lock)) {',
+    to: 'if (true as boolean) {',
+    tests: [CARRIED],
+  },
+);
+
+const only = process.argv.includes('--only')
+  ? process.argv[process.argv.indexOf('--only') + 1]
+  : undefined;
 const results = [];
-for (const mutation of MUTATIONS) {
+for (const mutation of MUTATIONS.filter((entry) => !only || entry.name.startsWith(only))) {
   const file = path.join(root, mutation.file);
   const original = readFileSync(file, 'utf8');
   if (!original.includes(mutation.from)) {

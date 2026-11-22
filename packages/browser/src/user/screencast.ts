@@ -53,7 +53,7 @@ export async function startScreencast(
       quality: EVENT_QUALITY,
     });
   } catch (error) {
-    if (error instanceof BridgeError && error.code === 'extension_missing')
+    if (error instanceof BridgeError && error.code === 'unsupported')
       return poll(deps, maxWidth, nth, onFrame);
     throw error;
   }

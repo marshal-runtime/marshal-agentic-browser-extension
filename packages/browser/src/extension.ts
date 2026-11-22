@@ -1,33 +1,51 @@
 /**
  * dist/runtime.cjs entrypoint. The extension needs nothing from another extension: its one model dependency is the
- * host's `marshal.models.decide` capability, reached through `context.execute`.
+ * host's `marshal.models.decide` capability, reached through `context.execute`, and it carries both halves of the
+ * person's-Chrome backend: the local bridge started here and the Chrome extension in dist/chrome-extension.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { BrowserService, type BrowserConfiguration } from './capabilities.js';
 import type { RuntimeExtensionActivation, RuntimeExtensionActivationContext } from './contracts.js';
 import { createHostDecider } from './engine/decider.js';
-import { createHostBridge } from './user/bridge.js';
+import { DEFAULT_CHROME_EXTENSION_DIR, installCarriedExtension } from './user/carried-folder.js';
+import { BRIDGE_PORT, createLocalBridgeClient, LocalBridge } from './user/local-bridge.js';
+import { carriedExtension } from './user/status.js';
 import { createWatchApplication } from './watch/app.js';
 
-export function activate(
+export async function activate(
   context: RuntimeExtensionActivationContext<
     BrowserConfiguration & Readonly<Record<string, unknown>>
   >,
 ): Promise<RuntimeExtensionActivation> {
-  try {
-    const execute = context.execute.bind(context);
-    const service = new BrowserService(
-      (invocation) => createHostDecider(execute, invocation),
-      context.configuration,
-      (invocation) => createHostBridge(execute, invocation),
-      {},
-      execute,
-    );
-    return Promise.resolve({
-      capabilityProviders: [service.provider()],
-      uiApplications: [createWatchApplication()],
-      dispose: () => service.dispose(),
-    });
-  } catch (error) {
-    return Promise.reject(error as Error);
-  }
+  const execute = context.execute.bind(context);
+  const configuration = context.configuration;
+  // A port that is taken is reported by browser.status (port_in_use) and retried; activation never fails on it.
+  const bridge = new LocalBridge(configuration.bridgePort ?? BRIDGE_PORT);
+  await bridge.start();
+  // The Chrome extension's folder must outlive this install (each update installs elsewhere): a stable copy.
+  const carried = installCarriedExtension(
+    carriedExtension(),
+    configuration.chromeExtensionDir ?? DEFAULT_CHROME_EXTENSION_DIR,
+  );
+  const client = createLocalBridgeClient(
+    bridge,
+    path.join(configuration.artifactDir ?? path.join(os.tmpdir(), 'marshal-browser'), 'user-shots'),
+    carried,
+  );
+  const service = new BrowserService(
+    (invocation) => createHostDecider(execute, invocation),
+    configuration,
+    () => client,
+    {},
+    execute,
+  );
+  return {
+    capabilityProviders: [service.provider()],
+    uiApplications: [createWatchApplication()],
+    dispose: async () => {
+      await service.dispose();
+      await bridge.stop();
+    },
+  };
 }
