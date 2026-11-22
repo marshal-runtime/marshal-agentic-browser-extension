@@ -955,6 +955,109 @@ MUTATIONS.push(
   },
 );
 
+// Marley's relay findings of 2026-11-22: the strict want.data schema and page notes (tests/page-notes.test.ts).
+const NOTES = 'tests/page-notes.test.ts';
+MUTATIONS.push(
+  {
+    name: 'strict schema: extract sends the loose schema',
+    file: 'src/engine/speculate.ts',
+    from: 'schema: strictSchema(schema) as Record<string, unknown>,',
+    to: 'schema,',
+    tests: [NOTES],
+  },
+  {
+    name: 'strict schema: additionalProperties not set',
+    file: 'src/engine/strict-schema.ts',
+    from: "    out['additionalProperties'] = false;",
+    to: '',
+    tests: [NOTES],
+  },
+  {
+    name: 'strict schema: optional key not made nullable',
+    file: 'src/engine/strict-schema.ts',
+    from: 'strict[name] = required.has(name) || !isObject(inner) ? inner : nullable(inner);',
+    to: 'strict[name] = inner;',
+    tests: [NOTES],
+  },
+  {
+    name: 'strict schema: answer nulls of optional keys kept',
+    file: 'src/engine/task.ts',
+    from: 'extra.data = loosenAnswer(unmaskValues(output.choice, values), input.want.data);',
+    to: 'extra.data = unmaskValues(output.choice, values);',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: page_part threshold ignored',
+    file: 'src/engine/task.ts',
+    from: 'checks.pagePart >= PAGE_PART_THRESHOLD &&',
+    to: 'true &&',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: a page noted again on every visit',
+    file: 'src/engine/task.ts',
+    from: '        !noted.has(page) &&',
+    to: '',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: pageNotes:false still asks page_part',
+    file: 'src/engine/task.ts',
+    from: '        ...(settings.pageNotes\n          ? { page_part:',
+    to: '        ...(true\n          ? { page_part:',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: kept notes not settled before the next look',
+    file: 'src/engine/task.ts',
+    from: '      const decided = snapshot;\n      // A note started on the previous page is part of this look: the early extract, the goal check and the state.\n      await settleNotes();',
+    to: '      const decided = snapshot;',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: state omits the notes',
+    file: 'src/engine/task.ts',
+    from: 'state: promptOf(input.goal, decided, values, history, notes),',
+    to: 'state: promptOf(input.goal, decided, values, history),',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: goal check keeps the one-page wording',
+    file: 'src/engine/task.ts',
+    from: '(notes.length ? GOAL_MET_WITH_NOTES : GOAL_MET_INSTRUCTIONS),',
+    to: 'GOAL_MET_INSTRUCTIONS,',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: final extract does not see the notes',
+    file: 'src/engine/task.ts',
+    from: 'extractRequest(input.goal, input.want?.data ?? {}, snapshot, text, images, values, notes),',
+    to: 'extractRequest(input.goal, input.want?.data ?? {}, snapshot, text, images, values),',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: value pointers answer despite notes',
+    file: 'src/engine/task.ts',
+    from: 'fields && numbered && notes.length === 0 ? readValues(answers, fields, numbered) : null;',
+    to: 'fields && numbered ? readValues(answers, fields, numbered) : null;',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: early extract used though it missed a note',
+    file: 'src/engine/task.ts',
+    from: 'speculation?.signature === current && speculation.notes === notes.length ? speculation : null;',
+    to: 'speculation?.signature === current ? speculation : null;',
+    tests: [NOTES],
+  },
+  {
+    name: 'page notes: a failed note ends the task',
+    file: 'src/engine/task.ts',
+    from: '              return null;\n            },\n          );\n        noting = reading;',
+    to: '              throw error;\n            },\n          );\n        noting = reading;',
+    tests: [NOTES],
+  },
+);
+
 const only = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : undefined;

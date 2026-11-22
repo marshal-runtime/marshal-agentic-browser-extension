@@ -153,6 +153,15 @@ Fewer and overlapping calls (`src/engine/plan.ts`, `values.ts`, `speculate.ts`, 
   the goal, or the previous plan expected the goal met), the extract starts beside the decision on an unmarked capture
   and is used only if the decision confirms the goal on that same page. An unused one is counted in
   `stats.unusedCalls`. `speculativeExtract` (default true).
+- **Strict data schema.** The extract sends `want.data` in the strict form structured-output services require (every
+  object with `properties` gets `additionalProperties: false` and all its keys in `required`; a key the caller left
+  optional becomes nullable), and the answer comes back in the caller's shape (those nulls removed). A loose schema
+  made OpenAI refuse the extract (`extract_failed`) after the goal was met.
+- **Facts on several pages.** Each decision also asks `page_part` (does this page show part of the goal?). When the task
+  moves on from such a page, one extract copies what it shows of the goal (from the text and picture the decision
+  already had; at most 6 pages, each once), and later decisions, the goal check and the final extract see these notes;
+  value pointers give way to the extract once a note exists. Without notes a goal split over two pages looped between
+  them until `step_limit`. `pageNotes` (default true).
 - **Parallel awaits.** `on: "auto"` starts the managed Chrome process while the routing question is asked (no tab before
   the route is known); that routing question and the start-page triage are one request; `browser.ask` reads the
   snapshot, screenshot and text together; step screenshots are saved beside the decision. Two actions never run at once.
@@ -279,7 +288,7 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 ## Configuration
 
 `chromePath`, `profileRoot`, `profileSlot`, `tempRoot`, `headed`, `chromeSandbox`, `artifactDir`, `minConfidence`,
-`maxSteps`, `wallMs`, `vision`, `keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`,
+`maxSteps`, `wallMs`, `vision`, `keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `pageNotes`, `userVision`,
 `axHelperPath`, `ocrHelperPath`, `ffmpegPath`, `bridgePort`, `chromeExtensionDir`, `localBridge`, `carryChromeExtension`
 (see `runtime-extension.json`).
 Without `chromePath`, Chrome comes from `MARSHAL_BROWSER_CHROME`, then `MARSHAL_SDK_CHROME` (the Chrome a marshal-sdk host

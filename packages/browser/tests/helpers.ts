@@ -81,6 +81,8 @@ export interface Turn {
   readonly goalMet?: number;
   readonly needsOwner?: number;
   readonly pageReady?: number;
+  /** page_part (asked while settings.pageNotes is on). */
+  readonly pagePart?: number;
   readonly probabilities?: Record<string, number>;
   /** Answer without a next_action (the service dropped the question). */
   readonly missing?: boolean;
@@ -111,6 +113,8 @@ export class FakeDecider implements Decider {
     private readonly failWith?: Error,
     private readonly extractAnswer: unknown = { price: 42 },
   ) {}
+  /** Answer of a page-note extract (its schema asks only `facts`); a rejection when an Error. */
+  noteAnswer: unknown = { facts: '' };
   judge(input: DecideMultiInput): ReturnType<Decider['judge']> {
     const keys = Object.keys(input.questions);
     if (keys.length === 1 && keys[0] === 'start_page_answers') {
@@ -174,12 +178,20 @@ export class FakeDecider implements Decider {
       goal_met: { type: 'predicate', probability: turn.goalMet ?? 0.05 },
       needs_owner: { type: 'predicate', probability: turn.needsOwner ?? 0.02 },
       page_ready: { type: 'predicate', probability: turn.pageReady ?? 0.97 },
+      ...(input.questions['page_part']
+        ? { page_part: { type: 'predicate', probability: turn.pagePart ?? 0.05 } as DecideAnswer }
+        : {}),
     };
     return Promise.resolve({ success: true as const, answers, usage: { input_tokens: 100 } });
   }
   async extract(input: DecideSchemaInput): ReturnType<Decider['extract']> {
     this.extracted.push(input);
     if (this.extractGate) await this.extractGate;
+    const properties = (input.schema as { properties?: Record<string, unknown> }).properties ?? {};
+    if (Object.keys(properties).join() === 'facts') {
+      if (this.noteAnswer instanceof Error) throw this.noteAnswer;
+      return { success: true as const, choice: this.noteAnswer };
+    }
     return { success: true as const, choice: this.extractAnswer };
   }
   probe(): ReturnType<Decider['probe']> {

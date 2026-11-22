@@ -56,6 +56,10 @@
           "type": "boolean",
           "description": "Start the want.data extract beside a decision that is likely the last, instead of after it; an unused one is dropped (default true)."
         },
+        "pageNotes": {
+          "type": "boolean",
+          "description": "Keep what a page shows of the goal when the task moves on to another page, for goals whose facts sit on several pages (default true)."
+        },
         "userVision": {
           "type": "boolean",
           "description": "Attach a screenshot to decisions on the person's own Chrome (default false: text only, so no picture of their pages goes to the model provider)."

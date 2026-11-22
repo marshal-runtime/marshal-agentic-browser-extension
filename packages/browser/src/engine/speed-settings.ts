@@ -8,6 +8,8 @@ export interface SpeedConfiguration {
   readonly valuePointers?: boolean;
   /** Start the want.data extract beside a decision that is likely the last (default true). */
   readonly speculativeExtract?: boolean;
+  /** Keep what a page shows of the goal when the task moves on to another page (default true). */
+  readonly pageNotes?: boolean;
 }
 
 export function speedSettings(configuration: SpeedConfiguration): Partial<EngineSettings> {
@@ -21,5 +23,6 @@ export function speedSettings(configuration: SpeedConfiguration): Partial<Engine
     ...(typeof configuration.speculativeExtract === 'boolean'
       ? { speculativeExtract: configuration.speculativeExtract }
       : {}),
+    ...(typeof configuration.pageNotes === 'boolean' ? { pageNotes: configuration.pageNotes } : {}),
   };
 }
