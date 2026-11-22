@@ -2,6 +2,7 @@ import type { Decider } from '../src/engine/decider.js';
 import type { DecideAnswer, DecideMultiInput, DecideSchemaInput } from '../src/contracts.js';
 import type {
   ActOutcome,
+  ScreenshotOptions,
   Shot,
   Snapshot,
   SnapshotElement,
@@ -42,8 +43,7 @@ export class FakeTarget implements Target {
   readonly backend: Target['backend'] = 'managed';
   readonly description = 'fake';
   readonly actions: TargetAction[] = [];
-  readonly shots: { marks: readonly SnapshotElement[] | undefined; format: string | undefined }[] =
-    [];
+  readonly shots: ScreenshotOptions[] = [];
   snapshots = 0;
   constructor(
     private readonly pages: Snapshot[],
@@ -58,11 +58,11 @@ export class FakeTarget implements Target {
     this.actions.push(action);
     return Promise.resolve(this.outcome(action));
   }
-  screenshot(options?: { marks?: readonly SnapshotElement[]; format?: string }): Promise<Shot> {
-    this.shots.push({ marks: options?.marks, format: options?.format });
+  screenshot(options: ScreenshotOptions = {}): Promise<Shot> {
+    this.shots.push(options);
     return Promise.resolve({
       data: 'AAAA',
-      mimeType: options?.format === 'jpeg' ? 'image/jpeg' : 'image/png',
+      mimeType: options.format === 'jpeg' ? 'image/jpeg' : 'image/png',
     });
   }
   fullText(): Promise<string> {

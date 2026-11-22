@@ -14,7 +14,22 @@ import { MARKS_ID } from '../src/page/scripts.js';
 import { runTask } from '../src/engine/task.js';
 import type { Decider } from '../src/engine/decider.js';
 import type { DecideAnswer, DecideMultiInput } from '../src/contracts.js';
+import { DECISION_SHOT } from '../src/target.js';
 import { saveShot } from './helpers.js';
+
+/** Width and height from a JPEG's start-of-frame marker. */
+function jpegSize(data: Buffer): { width: number; height: number } | null {
+  let offset = 2;
+  while (offset + 9 < data.length) {
+    const marker = data.readUInt16BE(offset);
+    const length = data.readUInt16BE(offset + 2);
+    if (marker >= 0xffc0 && marker <= 0xffc3) {
+      return { height: data.readUInt16BE(offset + 5), width: data.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + length;
+  }
+  return null;
+}
 
 const chrome = findChrome();
 if (!chrome.path) console.warn(`[chrome.real] SKIPPED: ${chrome.reason}`);
@@ -103,9 +118,14 @@ describe.skipIf(!chrome.path)('managed Chrome (real)', () => {
       const tab = await ManagedTab.open(launcher, 'visitor');
       await tab.act({ kind: 'navigate', url: `${base}/` });
       const snap = await tab.snapshot();
-      const shot = await tab.screenshot({ marks: snap.elements, format: 'jpeg' });
+      const shot = await tab.screenshot({ ...DECISION_SHOT, marks: snap.elements });
       expect(shot.mimeType).toBe('image/jpeg');
-      expect(Buffer.from(shot.data, 'base64').subarray(0, 2).toString('hex')).toBe('ffd8');
+      const bytes = Buffer.from(shot.data, 'base64');
+      expect(bytes.subarray(0, 2).toString('hex')).toBe('ffd8');
+      // The decision image is the 1280x800 viewport scaled to 768x480.
+      expect(jpegSize(bytes)).toEqual({ width: 768, height: 480 });
+      const full = await tab.screenshot({ format: 'jpeg' });
+      expect(jpegSize(Buffer.from(full.data, 'base64'))).toEqual({ width: 1280, height: 800 });
       expect(
         await tab.evaluate(`return Boolean(document.getElementById(${JSON.stringify(MARKS_ID)}));`),
       ).toBe(false);

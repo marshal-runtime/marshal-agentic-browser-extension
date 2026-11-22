@@ -292,11 +292,24 @@ export class ManagedTab implements Target {
             height: Math.min(Math.ceil(size.height), 12_000),
             scale: 1,
           };
+      } else if (options.width) {
+        const metrics = await this.send('Page.getLayoutMetrics');
+        const view = metrics['cssVisualViewport'] as
+          | { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
+          | undefined;
+        if (view && view.clientWidth > options.width)
+          clip = {
+            x: view.pageX,
+            y: view.pageY,
+            width: view.clientWidth,
+            height: view.clientHeight,
+            scale: options.width / view.clientWidth,
+          };
       }
       const shot = await this.send('Page.captureScreenshot', {
         format,
-        ...(format === 'jpeg' ? { quality: 70 } : {}),
-        ...(clip ? { clip, captureBeyondViewport: true } : {}),
+        ...(format === 'jpeg' ? { quality: options.quality ?? 70 } : {}),
+        ...(clip ? { clip, ...(options.fullPage ? { captureBeyondViewport: true } : {}) } : {}),
       });
       return {
         data: String(shot['data']),

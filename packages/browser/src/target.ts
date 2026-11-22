@@ -68,7 +68,22 @@ export interface ScreenshotOptions {
   readonly marks?: readonly SnapshotElement[];
   readonly format?: 'png' | 'jpeg';
   readonly fullPage?: boolean;
+  /** Scale the visible viewport down to at most this many pixels wide (ignored with fullPage). */
+  readonly width?: number;
+  /** JPEG quality, 0-100 (default 70). */
+  readonly quality?: number;
 }
+
+/**
+ * The image attached to every decision: a 768-wide JPEG at quality 70. Measured on real pages (marshal-sdk #174 bench):
+ * p50 418 ms per step against 322 ms text-only and 660 ms for a 1280x800 PNG, and it caught a covering pop-up the
+ * text missed. One constant, so the size is changed in one place.
+ */
+export const DECISION_SHOT = {
+  format: 'jpeg',
+  width: 768,
+  quality: 70,
+} as const satisfies ScreenshotOptions;
 
 export interface Shot {
   readonly data: string;

@@ -33,6 +33,8 @@ describe('step engine: one decide call per step', () => {
     expect(first?.images?.[0]).toEqual({ url: 'data:image/jpeg;base64,AAAA', detail: 'auto' });
     // Only onscreen offered elements are drawn on the screenshot.
     expect(target.shots[0]?.marks?.map((element) => element.ref)).toEqual(['e1']);
+    // Every decision gets the one measured image size: a 768-wide JPEG at quality 70.
+    expect(target.shots[0]).toMatchObject({ format: 'jpeg', width: 768, quality: 70 });
     expect(target.actions).toEqual([{ kind: 'click', ref: 'e1' }]);
   });
 

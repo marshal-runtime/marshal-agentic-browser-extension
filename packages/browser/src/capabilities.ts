@@ -19,7 +19,7 @@ import { DecideError, type Decider } from './engine/decider.js';
 import { describeElement } from './engine/offers.js';
 import { runTask, type EngineSettings, type TaskInput } from './engine/task.js';
 import { DESCRIPTORS } from './descriptors.js';
-import type { ManagedProfile, Shot, TargetAction } from './target.js';
+import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
 
 export interface BrowserConfiguration extends LauncherOptions {
   readonly artifactDir?: string;
@@ -330,7 +330,7 @@ export class BrowserService {
         if (!opened.ok) return { ok: false, error: opened.error };
       }
       const snap = await session.tab.snapshot();
-      const shot = await session.tab.screenshot({ format: 'jpeg' });
+      const shot = await session.tab.screenshot(DECISION_SHOT);
       const text = (await session.tab.fullText()).slice(0, 12_000);
       const decideStarted = Date.now();
       const output = await decider.judge({

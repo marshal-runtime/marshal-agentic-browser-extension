@@ -11,7 +11,13 @@ import { DecideError, type Decider } from './decider.js';
 import { linkNeedsOwner } from './guards.js';
 import { actionOf, buildOffers, clip, type Offer } from './offers.js';
 import type { DecideAnswer, DecideImage, DecideQuestion } from '../contracts.js';
-import type { Shot, Snapshot, SnapshotElement, Target } from '../target.js';
+import {
+  DECISION_SHOT,
+  type Shot,
+  type Snapshot,
+  type SnapshotElement,
+  type Target,
+} from '../target.js';
 
 export type TaskStatus =
   | 'done'
@@ -245,7 +251,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         offer.element && !offer.element.offscreen ? [offer.element] : [],
       );
       try {
-        const shot = await deps.target.screenshot({ marks: unique(marked), format: 'jpeg' });
+        const shot = await deps.target.screenshot({ ...DECISION_SHOT, marks: unique(marked) });
         images.push({ url: `data:${shot.mimeType};base64,${shot.data}`, detail: 'auto' });
         if (deps.keepStepShots)
           artifacts.push({
@@ -456,7 +462,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         const images: DecideImage[] = [];
         if (vision) {
           try {
-            const shot = await deps.target.screenshot({ format: 'jpeg' });
+            const shot = await deps.target.screenshot(DECISION_SHOT);
             images.push({ url: `data:${shot.mimeType};base64,${shot.data}`, detail: 'auto' });
           } catch {
             // extract from the text alone
