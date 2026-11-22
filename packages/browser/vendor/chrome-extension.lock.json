@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/zyg-edge/marley-browser-extension",
+  "branch": "main",
+  "commit": "48cf63fb02b6533750bd114a7ae381cff2ce839b",
+  "path": "chrome-extension",
+  "channel": "developer",
+  "version": "0.5.0",
+  "extensionId": "hoeikcjhdgpjcbdjjkkfngdencimlnok",
+  "files": {
+    "background.js": "3eff12c1054db57bee1739d989a69f0c173b374ced59b5729330ccbb555f017b",
+    "icons/icon128.png": "995b42005cc13da886e384714004d29f649e8e9043697f7a8ea63ddc32a140b6",
+    "icons/icon16.png": "8daf8ae3f180eb3fc7a3e0b1a430d44a8495bc50e099b3bc23938774430aa2e3",
+    "icons/icon32.png": "82cef53efed2a830b389cb6c82aee5865132308d7817fc98aa547298f906da2b",
+    "icons/icon48.png": "5b9062d7fa1b95fe17301d226e71ff4922927d506a7d69d637c4cf6bfa768204",
+    "install-channel.js": "e592ec4d763784dbf0e38ba3435835a6c28d844c9aea658d2b3c0ca591d1b24d",
+    "manifest.json": "547c94bc4dbf35d5d064677386accb825c4b7db87d0911676250b7f03c198b2a",
+    "page.js": "e405c2084d50cf22d32f33c337ab9373c181ab278bd4fd7e91673e2f44eb7a76",
+    "popup.html": "9b28a04cda4233c34e190fd56c965e6789d70032729cb730fdfda2f7c544ea28",
+    "popup.js": "67fa44852bd9cd4401c357ebe0fedabd96690fa0ea54b62ad580d574f911d7e7"
+  },
+  "treeSha256": "2ce0a5d0cf198c4278fd32a24779248ae6c98a8cc274aa2a2632bb8676692fa0"
+}

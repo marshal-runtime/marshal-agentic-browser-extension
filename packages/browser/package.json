@@ -1,6 +1,6 @@
 {
   "name": "@marshal/browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One browser layer for agents: a Chrome it starts (agent / visitor / offline profiles), a step engine that asks marshal.models.decide one question set per step with a marked screenshot, and browser.task / ask / session.* capabilities.",
   "private": true,
   "type": "commonjs",
@@ -14,6 +14,7 @@
     "build": "rimraf dist && tsc --noEmit -p tsconfig.json && node build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "pack:org": "npm run build && node scripts/pack-org.mjs",
     "prepack": "npm run build"
   },
   "devDependencies": {

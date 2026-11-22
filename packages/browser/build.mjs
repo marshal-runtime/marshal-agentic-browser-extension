@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, rm } from 'node:fs/promises';
 import { warn } from 'node:console';
 import path from 'node:path';
 import { env, platform } from 'node:process';
@@ -50,3 +50,24 @@ for (const { folder, binary } of [
   await copyFile(built, dest);
   await chmod(dest, 0o755);
 }
+
+/**
+ * The Marley Chrome extension (developer channel) is carried in dist/chrome-extension, so one install of this package
+ * holds both halves of the person's-Chrome backend: the person loads that folder unpacked. Copied from
+ * vendor/chrome-extension (scripts/sync-chrome-extension.mjs) and checked against its lock again after the copy.
+ */
+const vendored = path.join(packageRoot, 'vendor', 'chrome-extension');
+const carried = path.join(packageRoot, 'dist', 'chrome-extension');
+await rm(carried, { recursive: true, force: true });
+await cp(vendored, carried, { recursive: true, verbatimSymlinks: true });
+execFileSync(
+  'node',
+  [path.join(packageRoot, 'scripts', 'sync-chrome-extension.mjs'), '--check', '--dir', carried],
+  {
+    stdio: 'inherit',
+  },
+);
+await copyFile(
+  path.join(packageRoot, 'vendor', 'chrome-extension.lock.json'),
+  path.join(packageRoot, 'dist', 'chrome-extension.lock.json'),
+);

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "identity": "@marshal/browser",
   "displayName": "Browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "entrypoint": "dist/runtime.cjs",
   "moduleFormat": "commonjs-bundle-v1",
   "configuration": {
@@ -71,6 +71,17 @@
         "ffmpegPath": {
           "type": "string",
           "description": "ffmpeg for session videos; otherwise MARSHAL_BROWSER_FFMPEG, the system's, or the one @marshal/hyperframes pins."
+        },
+        "bridgePort": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Loopback port of the bridge the person's Chrome (the carried Marley Chrome extension) connects to. Default 17373; the extension's popup must name the same address."
+        },
+        "chromeExtensionDir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute folder the carried Marley Chrome extension is copied to at activation, for Load unpacked; it outlives updates of this package. Default ~/.marshal/browser/chrome-extension."
         }
       },
       "additionalProperties": false

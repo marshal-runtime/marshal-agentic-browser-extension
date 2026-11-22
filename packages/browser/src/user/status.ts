@@ -1,16 +1,18 @@
 /**
- * Whether the person's own Chrome is paired with this Marshal, and if not, why, from typed signals only: the host's
- * answer status for `browserbridge.status` and the bridge's own fields (`listening`, `connected`, `lastDisconnect.reason`).
+ * Whether the person's own Chrome is paired with this Marshal, and if not, why, from typed signals only: the carried
+ * bridge's fields (`listening`, `bindError`, `connected`, `lastDisconnect.reason`).
  */
-import { BridgeError, type BridgeClient, type BridgeStatus } from './bridge.js';
+import { existsSync, readFileSync } from 'fs';
+import path from 'node:path';
+import type { BridgeClient, BridgeStatus } from './bridge.js';
+import { extensionIdOf } from './extension-id.js';
 
 export type UserBrowserReason =
   | 'paired'
-  | 'extension_missing'
+  | 'port_in_use'
   | 'no_socket'
   | 'control_off'
   | 'not_connected'
-  | 'denied'
   | 'error';
 
 export interface UserBrowserStatus {
@@ -26,13 +28,13 @@ export interface UserBrowserStatus {
 }
 
 /**
- * How to connect the person's own Chrome to this Marshal. Facts from zyg-edge/marley-browser-extension (README, commit
- * e1f64ab) and zygstinct apps/web (the /browser page):
- *   - Marshal's local socket (ws://127.0.0.1:17373/bridge) opens only in a developer install: the repository's
- *     chrome-extension folder loaded unpacked, with the bridge address typed into the popup;
- *   - the zip the Marley website serves at /browser is a store-style build (SITE_INSTALL): it pairs with Marley in the
- *     cloud for WhatsApp, and never opens Marshal's socket, so it cannot connect this Marshal;
- *   - there is no Chrome Web Store listing yet.
+ * How to connect the person's own Chrome to this Marshal. This package carries both halves:
+ *   - the Marley Chrome extension (zyg-edge/marley-browser-extension, folder chrome-extension, pinned commit of main,
+ *     developer channel) in `dist/chrome-extension`, which the person loads unpacked; it runs no model, it only exposes
+ *     browser controls;
+ *   - the local socket it connects to (src/user/local-bridge.ts, ws://127.0.0.1:17373/bridge).
+ * The Marley website's download (/browser) and a Chrome Web Store copy are store-style builds: they pair with Marley's
+ * cloud relay for WhatsApp and never open Marshal's socket.
  */
 export interface UserBrowserSetup {
   readonly reason: Exclude<UserBrowserReason, 'paired'>;
@@ -42,16 +44,21 @@ export interface UserBrowserSetup {
   readonly steps: readonly string[];
   readonly chromeExtension: {
     readonly name: 'Marley';
-    readonly repository: 'https://github.com/zyg-edge/marley-browser-extension';
-    readonly access: string;
-    readonly folder: 'chrome-extension';
+    /**
+     * Absolute path of the folder to load: a stable copy of the carried files (see carried-folder.ts), else the install's
+     * own dist/chrome-extension, or null when this build carries none.
+     */
+    readonly folder: string | null;
+    readonly folderNote?: string;
     readonly install: 'developer (Load unpacked)';
-    readonly bridgeAddress: typeof BRIDGE_ADDRESS;
+    readonly version?: string;
+    readonly repository: typeof REPOSITORY;
+    readonly commit?: string;
+    /** The address to enter in the extension's popup ("Developer: Marshal bridge"). */
+    readonly bridgeAddress: string;
   };
-  readonly marshalExtension: {
-    readonly identity: '@zygstinct/browser-bridge';
-    readonly folder: 'marshal-extension';
-  };
+  /** A Marley extension already in that Chrome from the website or the store, and what to do about it. */
+  readonly otherInstalls: string;
   /** The Marley website's install page: what it is, and why it does not connect Marshal. */
   readonly websiteInstall: { readonly url: typeof WEBSITE_INSTALL; readonly note: string };
   readonly storeListing: null;
@@ -59,75 +66,154 @@ export interface UserBrowserSetup {
 
 export const BRIDGE_ADDRESS = 'ws://127.0.0.1:17373/bridge';
 export const WEBSITE_INSTALL = 'https://app.marleyagent.com/browser';
+const REPOSITORY = 'https://github.com/zyg-edge/marley-browser-extension';
 
-const CHROME_STEPS: readonly string[] = [
-  "Get the Marley Chrome extension's source: the chrome-extension folder of https://github.com/zyg-edge/marley-browser-extension (a private ZyG repository; clone it with a ZyG GitHub account).",
-  'In Chrome open chrome://extensions, turn on Developer mode (top right), click Load unpacked and pick that chrome-extension folder. A copy downloaded from the Marley website does not work here: it never opens the local connection Marshal uses.',
-  `Click the Marley extension's icon, open "Developer: Marshal bridge" and enter ${BRIDGE_ADDRESS}.`,
-  'In the same popup turn on "Let Marley use this browser". The badge shows "on" once it reaches Marshal.',
-  'Run browser.status again: the user backend reads ready.',
-];
+const OTHER_INSTALLS =
+  "A Marley extension installed from the Marley website (app.marleyagent.com/browser) or the Chrome Web Store talks only to Marley's cloud relay (Marley on WhatsApp), never to Marshal. The website copy has the same extension id as the carried folder: remove it in chrome://extensions before Load unpacked. A store copy can stay, but it does not connect Marshal.";
 
-const SETUP: Readonly<
-  Record<Exclude<UserBrowserReason, 'paired'>, { summary: string; steps: readonly string[] }>
-> = {
-  extension_missing: {
-    summary:
-      "Marshal's browser bridge (@zygstinct/browser-bridge) is not installed or is off, so the person's Chrome cannot connect.",
-    steps: [
-      'Install or enable the @zygstinct/browser-bridge runtime extension in Marshal (the marshal-extension folder of https://github.com/zyg-edge/marley-browser-extension: build it with its build.mjs, then runtimeInstallLocalExtension with that folder).',
-      ...CHROME_STEPS,
-    ],
-  },
-  no_socket: {
-    summary:
-      "Marshal's browser bridge is installed but its local socket on port 17373 is not listening.",
-    steps: [
-      'Disable and enable the @zygstinct/browser-bridge extension in Marshal (or restart Marshal); check that nothing else holds port 17373.',
-      'Run browser.status again; if it now says not_connected, follow those steps.',
-    ],
-  },
-  control_off: {
-    summary:
-      'The Marley Chrome extension is connected but its switch "Let Marley use this browser" is off.',
-    steps: [
-      "Click the Marley extension's icon in Chrome and turn on 'Let Marley use this browser'.",
-      'Run browser.status again.',
-    ],
-  },
-  not_connected: {
-    summary:
-      "The person's Chrome is not connected: install the Marley Chrome extension as a developer install, point it at Marshal and switch it on.",
-    steps: CHROME_STEPS,
-  },
-  denied: {
-    summary: "Marshal's permission policy refuses the browser bridge to this caller.",
-    steps: [
-      "Ask the person to allow browserbridge.* (and browserbridge.control) for this agent in Marshal's permission settings.",
-    ],
-  },
-  error: {
-    summary: 'The browser bridge did not answer its status.',
-    steps: [
-      "Check the @zygstinct/browser-bridge extension's health in Marshal (runtimeListExtensions), then run browser.status again.",
-    ],
-  },
+export interface CarriedExtension {
+  readonly folder: string | null;
+  readonly version?: string;
+  readonly commit?: string;
+  /** Chrome's fixed id for it (from its manifest key): the only origin the bridge accepts. */
+  readonly extensionId?: string;
+  /** Set when the folder is the install's own (it moves on update): why the stable copy could not be made. */
+  readonly folderNote?: string;
+}
+
+/**
+ * The carried Chrome extension of this install: `dist/chrome-extension` beside the bundle, else (running from source)
+ * the package's dist or vendor folder. Its lock file names the version and commit.
+ */
+export function carriedExtension(
+  candidates: readonly string[] = [
+    path.join(__dirname, 'chrome-extension'),
+    path.join(__dirname, '..', '..', 'dist', 'chrome-extension'),
+    path.join(__dirname, '..', '..', 'vendor', 'chrome-extension'),
+  ],
+): CarriedExtension {
+  const folder = candidates.find((candidate) => existsSync(path.join(candidate, 'manifest.json')));
+  if (!folder) return { folder: null };
+  const id = extensionIdOf(folder);
+  const extensionId = id ? { extensionId: id } : {};
+  try {
+    const lock = JSON.parse(
+      readFileSync(path.join(folder, '..', 'chrome-extension.lock.json'), 'utf8'),
+    ) as { version?: unknown; commit?: unknown };
+    return {
+      folder,
+      ...(typeof lock.version === 'string' ? { version: lock.version } : {}),
+      ...(typeof lock.commit === 'string' ? { commit: lock.commit } : {}),
+      ...extensionId,
+    };
+  } catch {
+    return { folder, ...extensionId };
+  }
+}
+
+function chromeSteps(carried: CarriedExtension, address: string): string[] {
+  return [
+    ...(carried.folder
+      ? []
+      : [
+          'This install of @marshal/browser carries no Chrome extension folder (dist/chrome-extension is missing): reinstall the package, then follow the steps below.',
+        ]),
+    'In Chrome open chrome://extensions and turn on Developer mode (top right).',
+    `Click Load unpacked and pick this folder: ${carried.folder ?? '<the dist/chrome-extension folder of @marshal/browser>'}. It is the Marley extension${carried.version ? ` ${carried.version}` : ''}, carried in this install. If Marley from the Marley website is already there, remove it first (same extension id).${carried.folderNote ? ` ${carried.folderNote}` : ''}`,
+    `Click the Marley extension's icon, open "Developer: Marshal bridge" and enter ${address}.`,
+    'In the same popup make sure "Let Marley use this browser" is on. The badge shows "on" once it reaches Marshal.',
+    'Run browser.status again: the user backend reads ready.',
+  ];
+}
+
+const HOLDER_TEXT: Readonly<Record<string, string>> = {
+  'browser-bridge-extension':
+    'the old @zygstinct/browser-bridge extension, which this package replaces',
+  'marshal-browser': 'another Marshal on this machine that runs @marshal/browser',
+  other: 'another program',
 };
 
+function setupBody(
+  reason: Exclude<UserBrowserReason, 'paired'>,
+  status: BridgeStatus | undefined,
+  carried: CarriedExtension,
+  address: string,
+): { summary: string; steps: readonly string[] } {
+  const port = String(status?.port ?? 17373);
+  switch (reason) {
+    case 'port_in_use': {
+      const holder = status?.bindError?.holder ?? 'other';
+      const steps =
+        holder === 'browser-bridge-extension'
+          ? [
+              'Disable or remove the @zygstinct/browser-bridge extension in Marshal (Plugins, or runtimeDisableExtension / runtimeRemoveExtension with that identity); @marshal/browser carries the bridge now.',
+              'Run browser.status again: @marshal/browser takes the port by itself. A Chrome extension already set to this address reconnects on its own.',
+            ]
+          : holder === 'marshal-browser'
+            ? [
+                "Close the other Marshal, or give this one another port (configuration bridgePort) and enter ws://127.0.0.1:<that port>/bridge in the Chrome extension's popup.",
+                'Run browser.status again.',
+              ]
+            : [
+                `Find what holds port ${port} (lsof -nP -iTCP:${port} -sTCP:LISTEN) and stop it, or set this extension's bridgePort to a free port and enter that address in the Chrome extension's popup.`,
+                'Run browser.status again.',
+              ];
+      return {
+        summary: `Port ${port} for the person's Chrome is held by ${HOLDER_TEXT[holder] ?? 'another program'}, so this Marshal cannot open its bridge. Nothing is routed through the other holder.`,
+        steps,
+      };
+    }
+    case 'no_socket':
+      return {
+        summary: `This Marshal could not open the local socket for the person's Chrome on port ${port}.`,
+        steps: [
+          `Check that port ${port} on 127.0.0.1 can be opened, or set bridgePort to a free port and enter that address in the Chrome extension's popup; then run browser.status again.`,
+        ],
+      };
+    case 'control_off':
+      return {
+        summary:
+          'The Marley Chrome extension is connected but its switch "Let Marley use this browser" is off.',
+        steps: [
+          "Click the Marley extension's icon in Chrome and turn on 'Let Marley use this browser'.",
+          'Run browser.status again.',
+        ],
+      };
+    case 'not_connected':
+      return {
+        summary:
+          "The person's Chrome is not connected: load the Marley Chrome extension carried in this install (developer mode, Load unpacked), point it at Marshal and switch it on.",
+        steps: chromeSteps(carried, address),
+      };
+    case 'error':
+      return {
+        summary: "The bridge to the person's Chrome did not answer its status.",
+        steps: ['Run browser.status again; if it keeps failing, restart Marshal.'],
+      };
+  }
+}
+
 /** The typed setup for a reason the person's Chrome is not paired. */
-export function setupFor(reason: Exclude<UserBrowserReason, 'paired'>): UserBrowserSetup {
+export function setupFor(
+  reason: Exclude<UserBrowserReason, 'paired'>,
+  status?: BridgeStatus,
+  carried: CarriedExtension = carriedExtension(),
+): UserBrowserSetup {
+  const address = status?.url ?? BRIDGE_ADDRESS;
   return {
     reason,
-    ...SETUP[reason],
+    ...setupBody(reason, status, carried, address),
     chromeExtension: {
       name: 'Marley',
-      repository: 'https://github.com/zyg-edge/marley-browser-extension',
-      access: 'private repository of the ZyG GitHub organisation',
-      folder: 'chrome-extension',
+      folder: carried.folder,
       install: 'developer (Load unpacked)',
-      bridgeAddress: BRIDGE_ADDRESS,
+      ...(carried.version ? { version: carried.version } : {}),
+      repository: REPOSITORY,
+      ...(carried.commit ? { commit: carried.commit } : {}),
+      ...(carried.folderNote ? { folderNote: carried.folderNote } : {}),
+      bridgeAddress: address,
     },
-    marshalExtension: { identity: '@zygstinct/browser-bridge', folder: 'marshal-extension' },
+    otherInstalls: OTHER_INSTALLS,
     websiteInstall: {
       url: WEBSITE_INSTALL,
       note: "Marley's own page for pairing Chrome with Marley on WhatsApp (sign-in as a brand member needed). Its download is a store-style build that never opens Marshal's local connection, so it does not connect this Marshal.",
@@ -147,33 +233,44 @@ export class UserNotPaired extends Error {
 const SWITCHED_OFF = 'switched-off';
 
 export const DETAIL: Readonly<Record<Exclude<UserBrowserReason, 'paired'>, string>> = {
-  extension_missing:
-    'The browser bridge extension (@zygstinct/browser-bridge) is not installed or is disabled in Marshal.',
-  no_socket:
-    "The browser bridge is installed but its local socket is not listening, so the person's Chrome cannot reach it.",
+  port_in_use:
+    "The port of the bridge to the person's Chrome is held by another program, so this Marshal's bridge is not listening.",
+  no_socket: "The bridge to the person's Chrome is not listening on its local socket.",
   control_off:
-    "The person's Chrome extension is installed but its control switch ('Let Marley use this browser') is off.",
+    "The person's Chrome extension is connected but its control switch ('Let Marley use this browser') is off.",
   not_connected:
-    'No Chrome is attached to the browser bridge: the Marley Chrome extension is not installed, its control switch is off, or its bridge address is not set (an older Chrome extension does not say which).',
-  denied: "Marshal's permission policy does not allow this caller to use the browser bridge.",
-  error: 'The browser bridge did not answer its status.',
+    'No Chrome is attached: the Marley Chrome extension carried in this install is not loaded, its bridge address is not set, or its control switch is off (it does not say which).',
+  error: "The bridge to the person's Chrome did not answer its status.",
 };
 
 export async function userBrowserStatus(
   bridge: BridgeClient | undefined,
+  carriedGiven?: CarriedExtension,
 ): Promise<UserBrowserStatus> {
-  if (!bridge) return notReady('extension_missing');
+  const carried = carriedGiven ?? bridge?.carried;
+  if (!bridge)
+    return notReady('no_socket', undefined, 'no bridge was started in this host', carried);
   let status: BridgeStatus;
   try {
     status = await bridge.call<BridgeStatus>('browserbridge.status', {});
   } catch (error) {
-    if (error instanceof BridgeError && error.code === 'extension_missing')
-      return notReady('extension_missing');
-    if (error instanceof BridgeError && error.code === 'denied') return notReady('denied');
-    return notReady('error', error instanceof Error ? error.message : String(error));
+    return notReady(
+      'error',
+      undefined,
+      error instanceof Error ? error.message : String(error),
+      carried,
+    );
   }
-  if (status.listening !== true)
-    return notReady('no_socket', status.error ? `bridge said: ${status.error}` : undefined);
+  if (status.listening !== true) {
+    if (status.bindError?.code === 'port_in_use')
+      return notReady(
+        'port_in_use',
+        status,
+        `held by ${HOLDER_TEXT[status.bindError.holder ?? 'other'] ?? 'another program'}`,
+        carried,
+      );
+    return notReady('no_socket', status, status.error, carried);
+  }
   const hello = status.browser?.hello ?? null;
   if (status.connected === true && hello) {
     const version = typeof hello.extensionVersion === 'string' ? hello.extensionVersion : undefined;
@@ -187,16 +284,22 @@ export async function userBrowserStatus(
       screencast: events ? 'events' : 'polling',
     };
   }
-  if (status.lastDisconnect?.reason === SWITCHED_OFF) return notReady('control_off');
-  return notReady('not_connected');
+  if (status.lastDisconnect?.reason === SWITCHED_OFF)
+    return notReady('control_off', status, undefined, carried);
+  return notReady('not_connected', status, undefined, carried);
 }
 
-function notReady(reason: Exclude<UserBrowserReason, 'paired'>, extra?: string): UserBrowserStatus {
+function notReady(
+  reason: Exclude<UserBrowserReason, 'paired'>,
+  status: BridgeStatus | undefined,
+  extra: string | undefined,
+  carried: CarriedExtension | undefined,
+): UserBrowserStatus {
   return {
     name: 'user',
     ready: false,
     reason,
     detail: extra ? `${DETAIL[reason]} (${extra})` : DETAIL[reason],
-    setup: setupFor(reason),
+    setup: setupFor(reason, status, carried),
   };
 }

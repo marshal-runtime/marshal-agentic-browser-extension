@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Marley",
+  "version": "0.5.0",
+  "description": "Lets Marley work in your own Chrome, inside a purple 'Marley' tab group, when it needs your sign-ins.",
+  "minimum_chrome_version": "120",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxb1AmsRmoAPai0HX9HyjfW1ZbRjYnfRCosRR8YV33HhWdpcj+wLAPoOh15Z8FzrKe+Hy4cEKQ40Po7YtF9rJVgjnY+bEsV+KfaaxVc8D8UgSFSzthpSxWF/CSUcL0bQXKRA9iIq2NNHLwZoqlH21P571CrEbg0DUmwxBbQXlhuAkHsF+lQH3fRFlCf43VyIDsJ3/nnVaw+Xuyysczl1LjQPZp2tVOPwRA/wAVwAyoin1kGcU6Sh8ARctKcgNTXdFCOzVGM6UcvvQMPlc240m+EXPmaQ8ocSV45vXCJG3ImcT8SMoeIsxJ1fir9aLXaZrZ57D57yJ+nrRzNxlSJ3QUwIDAQAB",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Marley",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "webNavigation",
+    "debugger",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://app.marleyagent.com/*",
+    "https://app-staging.marley.zygedge.com/*",
+    "http://localhost:3107/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://app.marleyagent.com/*",
+      "https://app-staging.marley.zygedge.com/*",
+      "http://localhost:3107/*"
+    ]
+  }
+}

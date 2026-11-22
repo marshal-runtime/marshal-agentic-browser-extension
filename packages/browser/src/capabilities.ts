@@ -48,6 +48,10 @@ export interface BrowserConfiguration extends LauncherOptions, SpeedConfiguratio
   readonly ocrHelperPath?: string;
   /** ffmpeg for recordings (otherwise MARSHAL_BROWSER_FFMPEG, the system's, or the one @marshal/hyperframes pins). */
   readonly ffmpegPath?: string;
+  /** Loopback port of the bridge the person's Chrome connects to (default 17373). */
+  readonly bridgePort?: number;
+  /** Stable folder the carried Chrome extension is copied to for Load unpacked (default ~/.marshal/browser/chrome-extension). */
+  readonly chromeExtensionDir?: string;
 }
 
 const IDLE_MS = 10 * 60_000;
@@ -105,7 +109,7 @@ export class BrowserService {
   provider(): CapabilityProvider {
     return {
       id: '@marshal/browser',
-      version: '0.1.0',
+      version: '0.2.0',
       list: () => DESCRIPTORS,
       get: (name) => DESCRIPTORS.find((descriptor) => descriptor.name === name),
       invoke: (name, input, context) => this.invoke(name, input, context),

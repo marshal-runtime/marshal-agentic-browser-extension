@@ -135,9 +135,30 @@ Chrome. At most two processes start, on first use:
 
 ## The user backend
 
-The person's own signed-in Chrome, behind the same `Target` (`src/user/`). The transport is the installed
-`@zygstinct/browser-bridge` extension's `browserbridge.*` capabilities, reached through the host's `execute` with the
-caller's invocation context. No second socket is opened, and only the non-evaluate verbs are used.
+The person's own signed-in Chrome, behind the same `Target` (`src/user/`). This package carries both halves, so
+installing `@marshal/browser` alone is enough (no `@zygstinct/browser-bridge`):
+
+- **The Chrome extension:** `chrome-extension/` of zyg-edge/marley-browser-extension at a pinned commit of `main`
+  (developer channel: `SITE_INSTALL = false`, no `update_url`), vendored unchanged in `vendor/chrome-extension` with
+  per-file sha256 and a tree hash in `vendor/chrome-extension.lock.json`, and copied by the build to
+  `dist/chrome-extension` (no links; the build checks it against the lock). It runs no model; it only exposes browser
+  controls. Re-pin with
+  `node scripts/sync-chrome-extension.mjs --repo <checkout> --commit <sha on main>` (an unmerged branch is refused);
+  `--check [--dir <folder>]` verifies a folder.
+- **A stable folder for it:** Marshal installs each version of an extension in a new folder, so at activation the
+  carried files are copied (checked against the lock, unchanged files not rewritten, links refused) to
+  `chromeExtensionDir` (default `~/.marshal/browser/chrome-extension`). That folder is the one setup names for
+  Load unpacked; a new pin replaces it in one rename, and Chrome picks it up on its next start or Reload.
+- **The bridge socket** (`src/user/local-bridge.ts`, ported from that repo's `marshal-extension`): `ws://127.0.0.1:17373/bridge`
+  (`bridgePort` to change it), loopback only, only the carried extension's own origin
+  (`chrome-extension://<id>`, the id fixed by its manifest `key` and recorded in the lock; another installed extension is
+  refused), masked client frames only (RFC 6455; an unmasked frame closes with 1002), the newest browser wins, a browser
+  silent for 65 s is dropped. It offers the user backend the `browserbridge.*` verbs it uses and no `evaluate`;
+  `tabs.open`/`tabs.navigate` take only http(s) (or back/forward/reload). Screenshots go to private 0600 files.
+  `/health` answers `{"service":"marshal-browser"}`.
+- **When the port is taken** (by the old `@zygstinct/browser-bridge`, another Marshal with this package, or anything
+  else), nothing is routed through the holder: `browser.status` says `port_in_use`, names the holder (from its
+  `/health`) and gives the steps for it, and the bridge binds again on the next status once the port is free.
 
 - `on: "user"` on `browser.session.open`, `browser.ask` and `browser.task` opens a **background** tab
   (`active: false`) in the bridge's "Marley" tab group, at the given url. It never adopts a tab the person already has,
@@ -148,32 +169,35 @@ caller's invocation context. No second socket is opened, and only the non-evalua
   go to the managed Chrome without touching the bridge.
 - `browser.status` reports `user` as `paired` or, when it is not ready, one of these reasons:
 
-  - `extension_missing`: the bridge is not in Marshal;
-  - `no_socket`: the bridge is not listening;
+  - `port_in_use`: another program holds the bridge port (see above);
+  - `no_socket`: the bridge could not listen;
   - `control_off`: the person switched control off;
   - `not_connected`: no Chrome attached;
-  - `denied`: Marshal's policy refuses the bridge.
+  - `error`: the bridge did not answer its status.
 
-  `control_off` needs zyg-edge/marley-browser-extension#4; older Chrome extensions report `not_connected`.
+  `control_off` needs zyg-edge/marley-browser-extension#4; the carried main build reports `not_connected`.
 
   When it is not ready, the status, a refused `on: "user"` session or `browser.ask` (`status: "needs_owner"`,
   `reason: "user_browser_not_paired"`) and a task stopped with `connect your browser` carry `setup`: the reason, a
-  summary and the steps for that reason. The Marshal socket opens only in a developer ("Load unpacked") install of
-  the Marley Chrome extension (`chrome-extension` folder of the private zyg-edge/marley-browser-extension), after the
-  bridge address `ws://127.0.0.1:17373/bridge` is entered in its popup. `setup.websiteInstall` names the Marley
-  website's download for what it is: it pairs with Marley in the cloud and does not connect Marshal. There is no
-  Chrome Web Store listing (`storeListing: null`).
+  summary and the steps for that reason. For `not_connected`: in Chrome, chrome://extensions, Developer mode, Load
+  unpacked with the absolute folder in `setup.chromeExtension.folder` (remove a Marley extension from the Marley website
+  first: same extension id), then enter `setup.chromeExtension.bridgeAddress` in the popup's "Developer: Marshal
+  bridge" and keep "Let Marley use this browser" on. `setup.otherInstalls` and `setup.websiteInstall` say that the
+  website download and a Chrome Web Store copy pair only with Marley's cloud relay and never connect Marshal. There is
+  no Chrome Web Store listing (`storeListing: null`).
 
 - **Snapshot:** the same `eN` shape. The bridge's own refs become `node`. A field is secret when it is a password,
-  the bridge masked its value, or the bridge flags it `secret` (#4 flags empty code fields too).
+  the bridge masked its value, or the bridge flags it `secret`. The carried main build masks only a field that holds
+  a value, so an empty one-time-code field is not seen as secret until #4 (which flags it) is merged and re-pinned.
   - Secret fields are never typed into or clicked, even by a direct `browser.session.act`.
   - `select` is refused: the bridge reports no options yet.
 - **Decisions are text-only** on this backend unless the `userVision` config is true (a per-call `vision` cannot turn
   it on). Pictures of the person's pages do not go to the model provider by default.
 - **Screenshots:** marked screenshots are still made for the caller. The bridge's PNG is decoded, boxed and labelled in
   plain JS (zlib, bundled jpeg-js); nothing is drawn in the person's page. The bridge's file is removed after reading.
-- **`screencast()`:** forwarded `Page.screencastFrame` frames when the bridge offers `browserbridge.screencast.*` (#4).
-  Otherwise one polled screenshot per second.
+- **`screencast()`:** one polled screenshot per second. Forwarded frames need #4 and the bridge verbs for them.
+- **Forms:** the carried build reports no form targets, so `browser.task` stops with `needs_owner` /
+  `form_target_unknown` before submitting a form that holds a supplied value.
 
 ## The app backend (macOS)
 
@@ -209,20 +233,31 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 ## Configuration
 
 `chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
-`keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath` (see `runtime-extension.json`).
+`keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath`,
+`bridgePort`, `chromeExtensionDir` (see `runtime-extension.json`).
 Without `chromePath`, Chrome comes from `MARSHAL_BROWSER_CHROME`, then `MARSHAL_SDK_CHROME` (the Chrome a marshal-sdk host
-found), then the usual install paths.
+found), then the usual install paths. On Linux, Chrome gets `--disable-dev-shm-usage` (containers give /dev/shm 64 MB),
+and `--no-sandbox` only when the process runs as root (Chrome refuses to start as root otherwise).
 
 ## Build and test
 
 ```bash
 npm install
 npm run build      # tsc --noEmit + esbuild -> dist/runtime.cjs; on macOS also swift build + stage both helpers
+                   # (run it first: the bundle, dist/chrome-extension and org-archive tests check the build output)
 npx vitest run     # engine (fake decide), app backend (fake helper process), units, manifest/bundle allow-list,
                    # real Chrome (skipped without Chrome), lifecycle/screencast/watch/recorder units, and a real
                    # Chrome + ffmpeg recording checked with ffprobe (skipped without ffmpeg)
 node scripts/mutate-app-guards.mjs   # removes each app guard in turn; every removal must fail a test
-node scripts/mutate-session-guards.mjs   # the same for the session operations and the Chrome setup (needs Chrome)
-# the user backend over the real bridge in a throwaway Chrome for Testing (skipped without both):
-MB_BRIDGE_REPO=<marley-browser-extension checkout> MB_CHROME_FOR_TESTING=<binary> npx vitest run tests/user.real.test.ts
+node scripts/mutate-session-guards.mjs   # the same for the session operations, the Chrome setup, the carried bridge
+                                         # and the carried Chrome extension (needs Chrome; --only <name prefix>)
+# tests/user.real.test.ts: the carried extension in a throwaway Chrome for Testing profile and the carried bridge
+# (MB_CHROME_FOR_TESTING, else Playwright's cached Chrome for Testing; skipped without one; never the person's Chrome)
+# the same through a clean marshal-sdk host with only this package (stage it without links first):
+node scripts/prove-user-carried.mjs --sdk <marshal-sdk dist/src/index.js> --package <copy> --out <dir> [--port-in-use 17373]
+npm run pack:org -- --out <dir>   # the org catalog archive: browser-<version>.tgz (helpers 0755, no links), .sha256, index.json
 ```
+
+Marshal's own extension packer writes every file 0644 and would strip `+x` from `dist/native/*`, so the org catalog
+takes the archive `pack:org` builds (tests/pack-org.test.ts extracts it and runs the helpers). One archive per version:
+bump `version` in both `package.json` and `runtime-extension.json` (the script refuses a mismatch).

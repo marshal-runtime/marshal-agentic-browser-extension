@@ -9,6 +9,8 @@ export default tseslint.config(
       '**/build/',
       // Plain-JS eval harness run by hand (packages/browser/bench); not part of any tsconfig project.
       'packages/browser/bench/',
+      // The Marley Chrome extension, vendored unchanged at a pinned commit (scripts/sync-chrome-extension.mjs).
+      'packages/browser/vendor/',
       '**/node_modules/',
       '*.config.*',
       '**/*.config.*',
@@ -48,6 +50,14 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/unbound-method': 'off',
       'no-console': 'off',
+    },
+  },
+  {
+    // Plain-JS maintenance scripts run with node (no TypeScript types to check against).
+    files: ['packages/browser/scripts/*.mjs'],
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      '@typescript-eslint/explicit-function-return-type': 'off',
     },
   },
   {

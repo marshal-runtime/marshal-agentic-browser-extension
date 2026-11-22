@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DESCRIPTORS } from '../src/descriptors.js';
 
 const manifest = JSON.parse(
@@ -52,7 +52,15 @@ describe('runtime-extension.json', () => {
 });
 
 describe('dist/runtime.cjs', () => {
-  const bundle = existsSync(bundlePath) ? readFileSync(bundlePath, 'utf8') : '';
+  let bundle = '';
+  beforeAll(() => {
+    // A checkout that was not built fails here with the reason, not with a confusing assertion below.
+    if (!existsSync(bundlePath))
+      throw new Error(
+        'dist/runtime.cjs is missing: run `npm run build` first (these tests check the built bundle)',
+      );
+    bundle = readFileSync(bundlePath, 'utf8');
+  });
 
   it('is built (run `npm run build` first)', () => {
     expect(bundle.length).toBeGreaterThan(0);

@@ -1,31 +1,20 @@
 /**
- * The `user` backend's transport: the installed `@zygstinct/browser-bridge` extension (provider `zygstinct.browser-bridge`,
- * source zyg-edge/marley-browser-extension), reached through the host's `execute` like any other capability. No second
- * socket: the bridge owns the one WebSocket to the person's Chrome, its "Marley" tab group and its permission
- * (`browserbridge.control`). Only the non-evaluate verbs are used, so this also works over the bridge's cloud relay, which
- * never runs page JavaScript.
+ * The `user` backend's transport: the bridge to the Marley Chrome extension that this package carries
+ * (src/user/local-bridge.ts, the local socket the developer install of dist/chrome-extension connects to). It speaks
+ * the `browserbridge.*` names and shapes of the old `@zygstinct/browser-bridge` extension, so the user backend is the
+ * same code; that extension's capabilities are not called any more (one path to the person's Chrome). Only the
+ * non-evaluate verbs exist.
  */
-import {
-  RUNTIME_PROTOCOL_VERSION,
-  type InvocationContext,
-  type RuntimeExecuteFn,
-} from '../contracts.js';
+import type { CarriedExtension } from './status.js';
 
 /**
  * Why a bridge call failed, as a typed code (never parsed from message text):
- *   - `extension_missing`: no `browserbridge.*` capability on this host (the bridge extension is absent or disabled);
- *   - `denied`: the host's policy refused the call, or it needs an approval nobody gave;
- *   - `not_connected`: the bridge answered but no Chrome is attached (or it left mid-call);
+ *   - `not_connected`: no Chrome is attached (or it left mid-call);
  *   - `stale_ref`, `no_tab`: the element or the tab is gone;
+ *   - `unsupported`: the carried bridge does not offer this verb (live frames before marley-browser-extension#4);
  *   - `failed`: anything else the bridge or Chrome reported.
  */
-export type BridgeErrorCode =
-  | 'extension_missing'
-  | 'denied'
-  | 'not_connected'
-  | 'stale_ref'
-  | 'no_tab'
-  | 'failed';
+export type BridgeErrorCode = 'not_connected' | 'stale_ref' | 'no_tab' | 'unsupported' | 'failed';
 
 export class BridgeError extends Error {
   constructor(
@@ -39,7 +28,7 @@ export class BridgeError extends Error {
   }
 }
 
-/** Error codes the bridge (marshal-extension/src/bridge.js) and the Chrome extension (background.js) send. */
+/** Error codes the carried bridge (local-bridge.ts) and the Chrome extension (background.js) send. */
 const NOT_CONNECTED_CODES: ReadonlySet<string> = new Set([
   'browser-not-connected',
   'browser-disconnected',
@@ -50,54 +39,18 @@ const NO_TAB_CODES: ReadonlySet<string> = new Set(['tab-not-found', 'tab-not-in-
 
 export interface BridgeClient {
   call<T = Record<string, unknown>>(name: string, input: Record<string, unknown>): Promise<T>;
+  /** The Chrome extension folder setup names (the carried bridge sets it at activation; see carried-folder.ts). */
+  readonly carried?: CarriedExtension;
 }
 
-export function createHostBridge(
-  execute: RuntimeExecuteFn,
-  context?: InvocationContext,
-): BridgeClient {
-  return {
-    async call<T>(name: string, input: Record<string, unknown>): Promise<T> {
-      let response;
-      try {
-        response = await execute(
-          {
-            protocolVersion: RUNTIME_PROTOCOL_VERSION,
-            targetType: 'operation',
-            target: name,
-            input,
-          },
-          context,
-        );
-      } catch (error) {
-        throw new BridgeError('failed', error instanceof Error ? error.message : String(error));
-      }
-      if (response.status === 'not_found')
-        throw new BridgeError('extension_missing', `${name} is not offered by this host`);
-      if (response.status === 'denied' || response.status === 'approval_required')
-        throw new BridgeError(
-          'denied',
-          response.error?.message ?? `${name} was not allowed (${response.status})`,
-          response.status,
-        );
-      if (response.status !== 'success') {
-        const bridgeCode = response.error?.code ?? '';
-        const message = response.error?.message ?? `${name} ${response.status}`;
-        throw new BridgeError(codeOf(bridgeCode), message, bridgeCode || undefined);
-      }
-      return (response.result?.output ?? {}) as T;
-    },
-  };
-}
-
-function codeOf(bridgeCode: string): BridgeErrorCode {
+export function codeOf(bridgeCode: string): BridgeErrorCode {
   if (NOT_CONNECTED_CODES.has(bridgeCode)) return 'not_connected';
   if (STALE_CODES.has(bridgeCode)) return 'stale_ref';
   if (NO_TAB_CODES.has(bridgeCode)) return 'no_tab';
   return 'failed';
 }
 
-/** The bridge's own types, as marshal-extension/src/capabilities.js and chrome-extension/page.js produce them. */
+/** The bridge's own types, as the carried bridge and chrome-extension/page.js produce them. */
 export interface BridgeStatus {
   readonly listening?: boolean;
   readonly url?: string;
@@ -113,6 +66,14 @@ export interface BridgeStatus {
   /** Added by marley-browser-extension's event-forwarding PR: why the last browser left. */
   readonly lastDisconnect?: { readonly reason?: string; readonly at?: string } | null;
   readonly error?: string;
+  /** The carried bridge: the port it serves (or tried), and why it could not bind it. */
+  readonly port?: number;
+  readonly bindError?: {
+    readonly code: 'port_in_use' | 'listen_failed';
+    readonly message: string;
+    /** What holds the port: the old bridge extension, another @marshal/browser, or unknown. */
+    readonly holder?: 'browser-bridge-extension' | 'marshal-browser' | 'other';
+  };
 }
 
 export interface BridgeElement {

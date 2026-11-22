@@ -10,7 +10,6 @@ import { DecideError, type Decider } from '../src/engine/decider.js';
 import { runTask } from '../src/engine/task.js';
 import {
   BridgeError,
-  createHostBridge,
   type BridgeClient,
   type BridgeElement,
   type BridgeSnapshot,
@@ -101,7 +100,7 @@ class FakeBridge implements BridgeClient {
     const handler = this.handlers[name];
     if (!handler)
       return Promise.reject(
-        new BridgeError('extension_missing', `${name} is not offered by this host`),
+        new BridgeError('unsupported', `${name} is not offered by the carried bridge`),
       );
     try {
       return Promise.resolve(handler(input) as T);
@@ -129,12 +128,24 @@ async function openTab(bridge = new FakeBridge()): Promise<{ bridge: FakeBridge;
 }
 
 describe("browser.status: is the person's Chrome paired, and if not why", () => {
-  it('extension_missing when the host has no browserbridge capability (or no bridge at all)', async () => {
-    expect((await userBrowserStatus(undefined)).reason).toBe('extension_missing');
-    const status = await userBrowserStatus(
-      new FakeBridge({ 'browserbridge.status': undefined as never }),
+  it('no_socket when no bridge was started; port_in_use (with what holds it) when the port is taken', async () => {
+    expect((await userBrowserStatus(undefined)).reason).toBe('no_socket');
+    const taken = await userBrowserStatus(
+      new FakeBridge({
+        'browserbridge.status': () => ({
+          listening: false,
+          port: 17373,
+          bindError: {
+            code: 'port_in_use',
+            message: 'EADDRINUSE',
+            holder: 'browser-bridge-extension',
+          },
+        }),
+      }),
     );
-    expect(status).toMatchObject({ ready: false, reason: 'extension_missing' });
+    expect(taken).toMatchObject({ ready: false, reason: 'port_in_use' });
+    expect(taken.detail).toContain('@zygstinct/browser-bridge');
+    expect(taken.setup?.steps[0]).toMatch(/Disable or remove the @zygstinct\/browser-bridge/);
   });
 
   it('no_socket when the bridge is installed but not listening', async () => {
@@ -183,13 +194,7 @@ describe("browser.status: is the person's Chrome paired, and if not why", () => 
     expect(status.ready).toBe(false);
   });
 
-  it('denied when the host policy refuses the bridge; error on anything else', async () => {
-    const denied = new FakeBridge({
-      'browserbridge.status': () => {
-        throw new BridgeError('denied', 'policy');
-      },
-    });
-    expect((await userBrowserStatus(denied)).reason).toBe('denied');
+  it('error when the bridge cannot answer its status', async () => {
     const broken = new FakeBridge({
       'browserbridge.status': () => {
         throw new BridgeError('failed', 'boom');
@@ -212,57 +217,6 @@ describe("browser.status: is the person's Chrome paired, and if not why", () => 
       }),
     });
     expect((await userBrowserStatus(events)).screencast).toBe('events');
-  });
-});
-
-describe('host bridge client: host answers become typed codes', () => {
-  const respond = (response: unknown): BridgeClient =>
-    createHostBridge(() => Promise.resolve(response as never), undefined);
-  it("maps not_found, denied, approval_required and the bridge's own codes", async () => {
-    const codeOf = async (response: unknown): Promise<string> =>
-      respond(response)
-        .call('browserbridge.snapshot', { tabId: 1 })
-        .then(
-          () => 'ok',
-          (error: BridgeError) => error.code,
-        );
-    expect(await codeOf({ status: 'not_found' })).toBe('extension_missing');
-    expect(await codeOf({ status: 'denied' })).toBe('denied');
-    expect(await codeOf({ status: 'approval_required' })).toBe('denied');
-    expect(
-      await codeOf({ status: 'failed', error: { code: 'browser-not-connected', message: 'x' } }),
-    ).toBe('not_connected');
-    expect(await codeOf({ status: 'failed', error: { code: 'stale-ref', message: 'x' } })).toBe(
-      'stale_ref',
-    );
-    expect(
-      await codeOf({ status: 'failed', error: { code: 'tab-not-in-group', message: 'x' } }),
-    ).toBe('no_tab');
-    expect(await codeOf({ status: 'failed', error: { code: 'page-error', message: 'x' } })).toBe(
-      'failed',
-    );
-    const ok = await respond({ status: 'success', result: { output: { a: 1 } } }).call('x', {});
-    expect(ok).toEqual({ a: 1 });
-  });
-
-  it("sends the exact capability name and input through execute with the caller's context", async () => {
-    const seen: unknown[] = [];
-    const context = { requestId: 'r1' } as never;
-    const bridge = createHostBridge((request, ctx) => {
-      seen.push(request, ctx);
-      return Promise.resolve({
-        protocolVersion: '1.0.0',
-        status: 'success',
-        result: { output: {} },
-      });
-    }, context);
-    await bridge.call('browserbridge.tabs.open', { url: URL, active: false });
-    expect(seen[0]).toMatchObject({
-      targetType: 'operation',
-      target: 'browserbridge.tabs.open',
-      input: { url: URL, active: false },
-    });
-    expect(seen[1]).toBe(context);
   });
 });
 
@@ -513,7 +467,7 @@ describe('screencast on the user backend', () => {
   it("a start that fails for another reason is the caller's error, not a silent fallback", async () => {
     const bridge = new FakeBridge({
       'browserbridge.screencast.start': () => {
-        throw new BridgeError('denied', 'policy');
+        throw new BridgeError('failed', 'policy');
       },
     });
     const { tab } = await openTab(bridge);
@@ -527,7 +481,7 @@ describe('screencast on the user backend', () => {
         },
         (error: unknown) => (error instanceof BridgeError ? error.code : 'other'),
       );
-    expect(outcome).toBe('denied');
+    expect(outcome).toBe('failed');
   });
 });
 
@@ -645,7 +599,7 @@ describe("routing: a goal that needs the person's login never runs in another br
   it('auto + explicit needsLogin skips the routing question; each pairing reason is reported', async () => {
     const spy = managedOpened();
     const cases: [FakeBridge | undefined, string][] = [
-      [undefined, 'extension_missing'],
+      [undefined, 'no_socket'],
       [new FakeBridge({ 'browserbridge.status': () => ({ listening: false }) }), 'no_socket'],
       [
         new FakeBridge({
