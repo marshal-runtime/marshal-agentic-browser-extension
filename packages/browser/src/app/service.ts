@@ -102,6 +102,11 @@ export class AppService {
 
   constructor(private readonly deps: AppServiceDeps) {}
 
+  /** The open app session's target, for the backend-neutral session operations (src/session-ops.ts). */
+  targetOf(sessionId: unknown): AppTarget {
+    return this.session(sessionId).target;
+  }
+
   owns(sessionId: unknown): boolean {
     return typeof sessionId === 'string' && this.sessions.has(sessionId);
   }
@@ -365,6 +370,7 @@ export class AppService {
       ...(outcome.error ? { error: outcome.error } : {}),
       ...(outcome.needsRealInput ? { needsRealInput: true } : {}),
       ...(outcome.realInput ? { realInput: true } : {}),
+      ...(outcome.unsupported ? { status: 'unsupported_on_backend', backend: 'app' } : {}),
       url: snap?.url ?? '',
       title: snap?.title ?? '',
     };

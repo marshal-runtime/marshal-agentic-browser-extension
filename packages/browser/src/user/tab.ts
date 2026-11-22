@@ -21,6 +21,7 @@ import type {
   Target,
   TargetAction,
 } from '../target.js';
+import { EDITING_KEYS, unsupportedOn } from '../target.js';
 import { BridgeError, type BridgeClient, type BridgeSnapshot, type BridgeTab } from './bridge.js';
 import { decodePng, drawMarks, encodeJpeg, encodePng, scaleTo, type Mark } from './image.js';
 import { startScreencast } from './screencast.js';
@@ -112,8 +113,31 @@ export class UserTab implements Target {
         return { ok: true, navigated: true };
       }
       case 'back':
-        await this.call('browserbridge.tabs.navigate', { tabId: this.tabId, url: 'back' });
+      case 'forward':
+      case 'reload':
+        await this.call('browserbridge.tabs.navigate', { tabId: this.tabId, url: action.kind });
         return { ok: true, navigated: true };
+      case 'press': {
+        // The bridge cannot say which field has focus: a key that edits text is refused while the page shows any
+        // secret field (the person's password stays theirs).
+        if (EDITING_KEYS.has(action.key) && (this.last?.elements ?? []).some(isSecret))
+          return {
+            ok: false,
+            error:
+              'secret-field: this page has a password or code field; the person types there themselves',
+          };
+        const before = this.last?.url ?? '';
+        await this.call('browserbridge.key', {
+          tabId: this.tabId,
+          key: action.key === 'Space' ? ' ' : action.key,
+          ...(action.modifiers.length ? { modifiers: action.modifiers } : {}),
+        });
+        return { ok: true, navigated: action.key === 'Enter' ? await this.settle(before) : false };
+      }
+      case 'hover':
+      case 'upload':
+        // The bridge has no hover verb, and the Chrome extension takes no uploads (its README).
+        return unsupportedOn('user', action.kind);
       case 'wait':
         await this.sleep(Math.min(Math.max(action.ms, 0), MAX_WAIT_MS));
         return { ok: true };

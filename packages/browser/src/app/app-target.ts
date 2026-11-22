@@ -22,6 +22,7 @@ import type {
   Target,
   TargetAction,
 } from '../target.js';
+import { unsupportedOn } from '../target.js';
 
 export interface AxCaller {
   call(request: AxHelperRequest, timeoutMs?: number): Promise<AxHelperResponse>;
@@ -290,6 +291,9 @@ export class AppTarget implements Target {
       case 'navigate':
       case 'back':
         return { ok: false, error: 'an app has no address or history to navigate' };
+      default:
+        // forward, reload, hover, press, upload: no Accessibility verb does them without real input.
+        return unsupportedOn('app', action.kind);
     }
   }
 

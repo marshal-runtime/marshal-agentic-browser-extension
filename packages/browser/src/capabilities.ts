@@ -29,7 +29,9 @@ import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from
 import type { BridgeClient } from './user/bridge.js';
 import { triageGoal, type Triage } from './engine/triage.js';
 import { routeTask } from './user/routing.js';
-import { userBrowserStatus } from './user/status.js';
+import { userBrowserStatus, UserNotPaired } from './user/status.js';
+import * as sessionOps from './session-ops.js';
+import { MODIFIERS, PRESS_KEYS, type Modifier, type PressKey } from './target.js';
 import { UserTab } from './user/tab.js';
 
 export interface BrowserConfiguration extends LauncherOptions, SpeedConfiguration {
@@ -154,11 +156,34 @@ export class BrowserService {
           return { output: await this.task(args, decider, bridge) };
         case 'browser.ask':
           return { output: await this.ask(args, decider, bridge) };
+        case 'browser.session.wait':
+          return { output: await sessionOps.waitFor(this.session(args, bridge).tab, args) };
+        case 'browser.session.read':
+          return { output: await sessionOps.read(this.session(args, bridge).tab, args) };
+        case 'browser.session.evaluate':
+          return { output: await sessionOps.evaluate(this.session(args, bridge).tab, args) };
+        case 'browser.session.log':
+          return { output: await sessionOps.log(this.session(args, bridge).tab, args) };
+        case 'browser.session.dialog':
+          return { output: await sessionOps.dialog(this.session(args, bridge).tab, args) };
+        case 'browser.session.viewport':
+          return { output: await sessionOps.viewport(this.session(args, bridge).tab, args) };
         default:
           throw new Error(`BROWSER_UNKNOWN_CAPABILITY: ${name}`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof UserNotPaired)
+        return {
+          output: {
+            ok: false,
+            status: 'needs_owner',
+            reason: 'user_browser_not_paired',
+            error: message,
+            userBrowser: { reason: error.status.reason, detail: error.status.detail },
+            ...(error.status.setup ? { setup: error.status.setup } : {}),
+          },
+        };
       return { output: { ok: false, error: message } };
     }
   }
@@ -176,9 +201,23 @@ export class BrowserService {
       case 'browser.session.act':
         return this.apps.act(args, parseAction(args['action']));
       case 'browser.session.screenshot':
-        return this.apps.screenshot(args);
+        return args['clip'] === undefined
+          ? this.apps.screenshot(args)
+          : sessionOps.unsupported('app', 'a screenshot clip');
+      case 'browser.session.viewport':
+        return sessionOps.viewport(this.apps.targetOf(args['sessionId']), args);
       case 'browser.session.close':
         return this.apps.close(args);
+      case 'browser.session.wait':
+        return sessionOps.waitFor(this.apps.targetOf(args['sessionId']), args);
+      case 'browser.session.read':
+        return sessionOps.read(this.apps.targetOf(args['sessionId']), args);
+      case 'browser.session.evaluate':
+        return sessionOps.evaluate(this.apps.targetOf(args['sessionId']), args);
+      case 'browser.session.log':
+        return sessionOps.log(this.apps.targetOf(args['sessionId']), args);
+      case 'browser.session.dialog':
+        return sessionOps.dialog(this.apps.targetOf(args['sessionId']), args);
       case 'browser.task': {
         const goal = args['goal'];
         if (typeof goal !== 'string' || goal.trim().length < 3)
@@ -243,8 +282,7 @@ export class BrowserService {
         "BROWSER_BAD_INPUT: the person's own Chrome needs a start url (http or https)",
       );
     const status = await userBrowserStatus(bridge);
-    if (!status.ready || !bridge)
-      throw new Error(`BROWSER_USER_NOT_PAIRED: ${status.reason}: ${status.detail}`);
+    if (!status.ready || !bridge) throw new UserNotPaired(status);
     const tab = await UserTab.open(bridge, url);
     const session: Session = { id: randomUUID(), tab, profile: 'own', lastUsed: Date.now() };
     this.sessions.set(session.id, session);
@@ -276,12 +314,20 @@ export class BrowserService {
     bridge?: BridgeClient,
   ): Promise<Record<string, unknown>> {
     if (args['on'] === 'user') {
+      if (args['viewport'] !== undefined) return sessionOps.unsupported('user', 'viewport');
       const session = await this.openUserTab(bridge, args['url']);
       const snap = await session.tab.snapshot();
       return { ok: true, sessionId: session.id, profile: 'own', url: snap.url, title: snap.title };
     }
     const profile = profileOf(args['profile'], 'visitor');
+    // Validated before a tab opens, so a bad value leaves nothing behind.
+    const observe = args['observe'] === undefined ? [] : sessionOps.logKinds(args['observe']);
+    const viewport =
+      args['viewport'] === undefined ? undefined : sessionOps.parseViewport(args['viewport']);
     const session = await this.openTab(profile);
+    if (viewport && session.tab instanceof ManagedTab) await session.tab.setViewport(viewport);
+    // Observing starts before the first page loads, so its console errors and requests are in the log.
+    if (observe.length && session.tab instanceof ManagedTab) await session.tab.observe(observe);
     if (typeof args['url'] === 'string') {
       const outcome = await session.tab.act({ kind: 'navigate', url: args['url'] });
       if (!outcome.ok) return { ok: false, sessionId: session.id, profile, error: outcome.error };
@@ -327,10 +373,15 @@ export class BrowserService {
     const session = this.session(args, bridge);
     const action = parseAction(args['action']);
     const outcome = await session.tab.act(action);
-    const snap = await session.tab.snapshot().catch(() => null);
+    // An open dialog blocks page reads; the caller answers it first (browser.session.dialog).
+    const snap = outcome.dialog ? null : await session.tab.snapshot().catch(() => null);
     return {
       ok: outcome.ok,
       ...(outcome.error ? { error: outcome.error } : {}),
+      ...(outcome.unsupported
+        ? { status: 'unsupported_on_backend', backend: session.tab.backend }
+        : {}),
+      ...(outcome.dialog ? { dialog: outcome.dialog } : {}),
       url: snap?.url ?? '',
       title: snap?.title ?? '',
     };
@@ -341,11 +392,14 @@ export class BrowserService {
     bridge?: BridgeClient,
   ): Promise<Record<string, unknown>> {
     const session = this.session(args, bridge);
+    const options = sessionOps.screenshotOptions(args);
+    if (options.clip && session.tab.backend !== 'managed')
+      return sessionOps.unsupported(session.tab.backend, 'a screenshot clip');
     const marks = args['marks'] === true ? (await session.tab.snapshot()).elements : undefined;
     const shot = await session.tab.screenshot({
       ...(marks ? { marks } : {}),
       fullPage: args['fullPage'] === true,
-      format: 'png',
+      ...options,
     });
     return { ok: true, path: await this.save(shot, session.id, marks ? 'marked' : 'page') };
   }
@@ -751,6 +805,32 @@ export function parseAction(value: unknown): TargetAction {
       return { kind: 'back' };
     case 'wait':
       return { kind: 'wait', ms: Math.min(Math.max(Number(action['ms']) || 1000, 0), 10_000) };
+    case 'forward':
+    case 'reload':
+      return { kind: action['kind'] };
+    case 'hover':
+      if (!ref) break;
+      return { kind: 'hover', ref };
+    case 'press': {
+      const key = action['key'];
+      if (typeof key !== 'string' || !(PRESS_KEYS as readonly string[]).includes(key)) break;
+      const modifiers = action['modifiers'] ?? [];
+      if (
+        !Array.isArray(modifiers) ||
+        !modifiers.every((modifier) => (MODIFIERS as readonly unknown[]).includes(modifier))
+      )
+        break;
+      return {
+        kind: 'press',
+        key: key as PressKey,
+        modifiers: [...new Set(modifiers as Modifier[])],
+      };
+    }
+    case 'upload': {
+      const paths = action['paths'];
+      if (!Array.isArray(paths) || !paths.every((entry) => typeof entry === 'string')) break;
+      return { kind: 'upload', ref, paths };
+    }
     default:
       break;
   }

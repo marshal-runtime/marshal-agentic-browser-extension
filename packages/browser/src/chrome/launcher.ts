@@ -70,7 +70,11 @@ export function chromeArgs(
       ? ['--disable-component-update', '--disable-background-networking']
       : []),
     '--window-size=1280,800',
-    ...(headed ? [] : ['--headless=new', '--hide-scrollbars', '--mute-audio']),
+    // --disable-gpu-compositing: a GPU-composited capture taller than 16,384 device px (Chrome's largest texture) repeats
+    // the top of the page past that row. Software compositing keeps hardware WebGL, which --disable-gpu would remove.
+    ...(headed
+      ? []
+      : ['--headless=new', '--hide-scrollbars', '--mute-audio', '--disable-gpu-compositing']),
     'about:blank',
   ];
 }
@@ -228,8 +232,11 @@ export function findChrome(options: LauncherOptions = {}): ChromeFound {
         };
   }
   const env = options.env ?? process.env;
-  const fromEnv = env['MARSHAL_BROWSER_CHROME'];
-  if (fromEnv && existsSync(fromEnv)) return { path: fromEnv, source: 'env' };
+  // MARSHAL_SDK_CHROME is the Chrome a marshal-sdk host found for its own "browser" port.
+  for (const name of ['MARSHAL_BROWSER_CHROME', 'MARSHAL_SDK_CHROME']) {
+    const fromEnv = env[name];
+    if (fromEnv && existsSync(fromEnv)) return { path: fromEnv, source: 'env' };
+  }
   for (const candidate of CANDIDATES[options.platform ?? process.platform] ?? []) {
     if (existsSync(candidate)) return { path: candidate, source: 'search' };
   }

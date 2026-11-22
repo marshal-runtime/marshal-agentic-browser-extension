@@ -7,12 +7,34 @@ live view and recording are seams, not code yet.
 
 ## Capabilities
 
-| Capability                                                   | What it does                                                                                                                                                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser.status`                                             | Backends and whether each is ready, the decide service, open sessions                                                                                                                             |
-| `browser.task`                                               | `{goal, on?, profile?, startUrl?, values?, want: {data?, text?, screenshot?}, bounds?: {maxSteps?, wallMs?}, allowedSites?, vision?, sessionId?, keepOpen?}` runs the step engine to a typed stop |
-| `browser.ask`                                                | `{url \| sessionId, questions}` answers named questions about one page in one decide call                                                                                                         |
-| `browser.session.open / snapshot / act / screenshot / close` | Direct control: open a tab, read `eN` refs, act on a ref, take a (marked) screenshot                                                                                                              |
+| Capability                                                         | What it does                                                                                                                                                                                      |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browser.status`                                                   | Backends and whether each is ready, the decide service, open sessions                                                                                                                             |
+| `browser.task`                                                     | `{goal, on?, profile?, startUrl?, values?, want: {data?, text?, screenshot?}, bounds?: {maxSteps?, wallMs?}, allowedSites?, vision?, sessionId?, keepOpen?}` runs the step engine to a typed stop |
+| `browser.ask`                                                      | `{url \| sessionId, questions}` answers named questions about one page in one decide call                                                                                                         |
+| `browser.session.open / snapshot / act / screenshot / close`       | Direct control: open a tab, read `eN` refs, act on a ref, take a (marked) screenshot                                                                                                              |
+| `browser.session.wait / read / evaluate / log / dialog / viewport` | Step-by-step driving: wait for text or an address, read text or HTML, run a script, console and network log, answer a dialog, set the device size (see below)                                     |
+
+### Step-by-step operations
+
+`browser.session.act` kinds: `click`, `submit`, `hover`, `type`, `select`, `scroll`, `navigate`, `back`, `forward`,
+`reload`, `wait`, `press` (named keys only: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home/End, PageUp/Down,
+with Alt/Control/Meta/Shift; text goes through `type`) and `upload` (absolute paths of regular files, at most 10 of
+100 MB each; `ref` is the button that opens the file chooser, which is intercepted, or none for the page's only file
+input). A kind or operation a backend cannot do answers `status: "unsupported_on_backend"`, never a substitute.
+
+| Operation                                                                          | managed                                                                                                        | user (person's Chrome)                                                              | app         |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------- |
+| `press`                                                                            | yes; Backspace/Delete/Space refused while a secret field has focus                                             | yes (`browserbridge.key`); those keys refused while the page shows any secret field | unsupported |
+| `hover`, `upload`                                                                  | yes                                                                                                            | unsupported                                                                         | unsupported |
+| `forward`, `reload`                                                                | yes                                                                                                            | yes (`tabs.navigate`)                                                               | unsupported |
+| `wait {text, textGone, urlIncludes, timeoutMs}`                                    | yes                                                                                                            | yes                                                                                 | yes         |
+| `read {format: text}` / `{format: html}`                                           | both                                                                                                           | text only                                                                           | text only   |
+| `evaluate {expression, timeoutMs}`                                                 | yes, own high-risk permission, result at most 500,000 characters                                               | never                                                                               | never       |
+| `log {kinds, clear}`                                                               | console and network, observe only, no headers, bodies or cookies; off until `open {observe}` or the first call | unsupported                                                                         | unsupported |
+| `dialog {accept?, promptText?}`                                                    | yes; an action that opens one returns it, page reads refuse until answered                                     | unsupported                                                                         | unsupported |
+| `viewport {width, height, deviceScaleFactor?, mobile?, touch?}`, `open {viewport}` | yes                                                                                                            | never resized                                                                       | unsupported |
+| `screenshot {format, quality, clip, fullPage}`                                     | all; full page or clip up to 30,000 CSS px high                                                                | format and quality; no clip                                                         | PNG         |
 
 `browser.task` stops with one of `done`, `needs_input`, `needs_owner`, `blocked`, `low_confidence`, `budget` or
 `decisions_unavailable`, with the trace (`{step, action, rung, ms, actMs, url, confidence, checks, note}`), stats and
@@ -134,6 +156,14 @@ caller's invocation context. No second socket is opened, and only the non-evalua
 
   `control_off` needs zyg-edge/marley-browser-extension#4; older Chrome extensions report `not_connected`.
 
+  When it is not ready, the status, a refused `on: "user"` session or `browser.ask` (`status: "needs_owner"`,
+  `reason: "user_browser_not_paired"`) and a task stopped with `connect your browser` carry `setup`: the reason, a
+  summary and the steps for that reason. The Marshal socket opens only in a developer ("Load unpacked") install of
+  the Marley Chrome extension (`chrome-extension` folder of the private zyg-edge/marley-browser-extension), after the
+  bridge address `ws://127.0.0.1:17373/bridge` is entered in its popup. `setup.websiteInstall` names the Marley
+  website's download for what it is: it pairs with Marley in the cloud and does not connect Marshal. There is no
+  Chrome Web Store listing (`storeListing: null`).
+
 - **Snapshot:** the same `eN` shape. The bridge's own refs become `node`. A field is secret when it is a password,
   the bridge masked its value, or the bridge flags it `secret` (#4 flags empty code fields too).
   - Secret fields are never typed into or clicked, even by a direct `browser.session.act`.
@@ -171,7 +201,8 @@ bundle loads no image library); every decision carries it, as on the managed bac
 
 ## Permissions
 
-Each capability asks `marshal.tool.invoke:<name>`. `browser.task`, `browser.ask` and `browser.session.open` are medium;
+Each capability asks `marshal.tool.invoke:<name>`. `browser.session.evaluate` is high (any script in a managed page,
+including the `agent` profile's sites). `browser.task`, `browser.ask` and `browser.session.open` are medium;
 their reason says the risk is high with `profile: "agent"` (the agent's lasting logins) or `on: "user"` (the person's
 own Chrome). Marshal's permission is per capability, so the input does not change the prompt's level.
 
@@ -179,6 +210,8 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 
 `chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
 `keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath` (see `runtime-extension.json`).
+Without `chromePath`, Chrome comes from `MARSHAL_BROWSER_CHROME`, then `MARSHAL_SDK_CHROME` (the Chrome a marshal-sdk host
+found), then the usual install paths.
 
 ## Build and test
 
@@ -189,6 +222,7 @@ npx vitest run     # engine (fake decide), app backend (fake helper process), un
                    # real Chrome (skipped without Chrome), lifecycle/screencast/watch/recorder units, and a real
                    # Chrome + ffmpeg recording checked with ffprobe (skipped without ffmpeg)
 node scripts/mutate-app-guards.mjs   # removes each app guard in turn; every removal must fail a test
+node scripts/mutate-session-guards.mjs   # the same for the session operations and the Chrome setup (needs Chrome)
 # the user backend over the real bridge in a throwaway Chrome for Testing (skipped without both):
 MB_BRIDGE_REPO=<marley-browser-extension checkout> MB_CHROME_FOR_TESTING=<binary> npx vitest run tests/user.real.test.ts
 ```
