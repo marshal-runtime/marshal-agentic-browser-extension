@@ -385,6 +385,103 @@ MUTATIONS.push({
   tests: ['tests/pack-org.test.ts'],
 });
 
+// The live panel (browser.watch.input and frame sizing).
+const PANEL = 'tests/watch-panel.test.ts';
+const PANEL_REAL = 'tests/watch-input.real.test.ts';
+MUTATIONS.push(
+  {
+    name: 'panel: a task watch takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (source.kind === 'task') return 'task';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: a session a task drives takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (source.task?.()) return 'task';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: "panel: the person's own Chrome takes input",
+    file: 'src/watch/watches.ts',
+    from: "if (target.backend === 'user') return 'user';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: an app takes input',
+    file: 'src/watch/watches.ts',
+    from: "if (target.backend === 'app') return 'app';",
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no rate limit',
+    file: 'src/watch/watches.ts',
+    from: 'if (watch.inputs.length >= INPUT_RATE)',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: control characters as text',
+    file: 'src/watch/watches.ts',
+    from: 'if (/\\p{Cc}/u.test(text))',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: any key name',
+    file: 'src/watch/watches.ts',
+    from: "if (typeof key !== 'string' || !(PRESS_KEYS as readonly string[]).includes(key))\n        return `key must be",
+    to: "if (typeof key !== 'string')\n        return `key must be",
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: any modifier',
+    file: 'src/watch/watches.ts',
+    from: '!modifiers.every((modifier) => (MODIFIERS as readonly unknown[]).includes(modifier))',
+    to: 'false',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: managed text into a secret field',
+    file: 'src/chrome/tab.ts',
+    from: '        if ((await this.evaluate(FOCUSED_SECRET_SCRIPT)) === true)',
+    to: '        if (false as boolean)',
+    tests: [PANEL_REAL],
+  },
+  {
+    name: 'panel: a click on the letterbox maps to the page',
+    file: 'src/watch/geometry.ts',
+    from: 'if (!(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1)) return null;',
+    to: '',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no frame byte bound',
+    file: 'src/watch/watches.ts',
+    from: 'if (bytes > FRAME_MAX_BYTES && watch.quality > QUALITY.min)',
+    to: 'if (false as boolean)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no maximum frame width',
+    file: 'src/watch/geometry.ts',
+    from: 'clamp(view.width, STREAM_LIMITS.minWidth, STREAM_LIMITS.maxWidth)',
+    to: 'clamp(view.width, STREAM_LIMITS.minWidth, Infinity)',
+    tests: [PANEL],
+  },
+  {
+    name: 'panel: no wheel clamp',
+    file: 'src/watch/watches.ts',
+    from: 'Math.max(-WHEEL_MAX, Math.min(WHEEL_MAX, Math.round(value)))',
+    to: 'Math.round(value)',
+    tests: [PANEL],
+  },
+);
+
 const only = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : undefined;

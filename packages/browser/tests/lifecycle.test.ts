@@ -369,7 +369,13 @@ describe('screencast hub', () => {
     channel.emit(frame('OTHER', 8)); // another tab's frame is ignored
     expect(a).toHaveLength(1);
     expect(b).toHaveLength(1);
-    expect(a[0]).toEqual({ ts: 1_700_000_007_000, width: 320, height: 200 });
+    expect(a[0]).toEqual({
+      ts: 1_700_000_007_000,
+      width: 320,
+      height: 200,
+      pageWidth: 1280,
+      pageHeight: 800,
+    });
     expect(
       channel.sent
         .filter((entry) => entry.method === 'Page.screencastFrameAck')
@@ -575,16 +581,27 @@ describe('recorder', () => {
 });
 
 describe('watch panel application', () => {
-  it('declares only the frame poll and the cancel as actions, for phone and desktop', () => {
+  it('declares only the frame poll, the cancel and the panel input as actions, for phone and desktop', () => {
     const app = createWatchApplication() as {
       id: string;
-      application: { actions: { id: string; target: { capability: string } }[] };
+      application: {
+        version: string;
+        actions: { id: string; version: string; target: { capability: string } }[];
+      };
       metadata: Record<string, unknown>;
     };
     expect(app.id).toBe('watch');
+    // The host refuses to activate the extension otherwise ("application.version must be 1.0.0").
+    expect(app.application.version).toBe('1.0.0');
+    expect(app.application.actions.map((action) => action.version)).toEqual([
+      '1.0.0',
+      '1.0.0',
+      '1.0.0',
+    ]);
     expect(app.application.actions.map((action) => action.target.capability)).toEqual([
       'browser.watch.frame',
       'browser.task.cancel',
+      'browser.watch.input',
     ]);
     expect(app.application.actions.every((action) => !action.id.includes('.'))).toBe(true);
     expect(app.metadata['marshal.ui.viewports']).toEqual(['mobile', 'desktop']);

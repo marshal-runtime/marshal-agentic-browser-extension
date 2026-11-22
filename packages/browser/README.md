@@ -53,6 +53,24 @@ and record run there too, but that path is not exercised by these tests.
   (the tab's `Page.startScreencast`, running only while the panel polls `browser.watch.frame`), the step the engine is
   on (action, rung, ms) and a Stop button that calls `browser.task.cancel`. `open: false` returns the
   `ui.application.open` input instead; `browser.watch.close` ends a watch.
+- The panel reads like a browser: an address bar (title, URL with the host emphasized, a live dot that blips on each
+  new frame), the picture fitted to both sides of the panel and centered (the panel never scrolls), and a status line
+  that ticks each second ("Live · page idle, last change 12 s ago", the task's step, "Session closed"). Each poll of
+  `browser.watch.frame` carries the picture's size in device pixels (`view`), and the screencast is asked for exactly
+  that size (at most 1920×1200; quality 80, lowered in steps of 10 down to 50 while a frame is over 400 KB), so the
+  browser downsamples once and the panel draws 1:1. Only the frames are resized; the page's own viewport never changes.
+  Chrome never upscales a screencast, so a panel larger than the page (a wide dock on a Retina screen) shows the page's
+  own pixels scaled up. The poll answer also carries `url`, `title`, `lastFrameAt`, `frameBytes`, `quality`,
+  `interactive` and `viewOnly`.
+- `browser.watch.input({watchId, event})` is how the person uses the page from the panel: `click` and `wheel` (points
+  as fractions `nx`, `ny` of the frame, mapped to the page's CSS pixels by the extension), `key` (the same named keys
+  as `press`), `text` (1 to 64 printable characters; pasted text is sent in such pieces) and `back` / `forward` /
+  `reload`. Only for a session on the managed backend that no task drives: a task's watch, a session a task is running
+  in, the person's own Chrome (`user`) and an app (`app`) are view only (`status: "view_only"`, and the panel says
+  why); text and editing keys are refused while a password, one-time-code or card field has focus
+  (`status: "secret_field"`); more than 20 inputs a second are refused (`rate_limited`). The typed text is never logged
+  or returned by the extension. Called from the panel, the host allows it as the application's declared action; an
+  agent calling it directly gets the usual approval (risk medium, like `browser.session.act`).
 - `want.video` on `browser.task`, or `browser.session.record.start / stop`, records the tab to an H.264 MP4 (at most
   10 fps, 15 minutes) with an ffmpeg found through `ffmpegPath`, `MARSHAL_BROWSER_FFMPEG`, the system's, or the one
   @marshal/hyperframes pins. Without one the call returns status `recorder_unavailable` before anything runs; a video

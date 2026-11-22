@@ -126,11 +126,15 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.watch.frame',
-    version: '0.2.0',
+    version: '0.2.1',
     title: 'Newest live frame of a watch',
     description:
-      "The watch panel's poll: the task's state and newest step plus the newest JPEG frame (base64) when it is newer than `since`; without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
-    inputSchema: object({ watchId: { type: 'string' }, since: { type: 'number' } }),
+      "The watch panel's poll: the task's state and newest step, the page's address and title, when the picture last changed, whether the person may use the page from the panel, and the newest JPEG frame (base64) when it is newer than `since`; `view` (the panel's picture in device pixels) sizes the frames. Without watchId, the newest watch. Meant for the panel; agents use browser.task.get.",
+    inputSchema: object({
+      watchId: { type: 'string' },
+      since: { type: 'number' },
+      view: object({ width: { type: 'number' }, height: { type: 'number' } }, ['width', 'height']),
+    }),
     outputSchema: {
       type: 'object',
       properties: {
@@ -139,6 +143,18 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
         kind: { enum: ['task', 'session'] },
         ...TASK_SUMMARY,
         seq: { type: 'number' },
+        now: { type: 'number', description: "The extension's clock (ms), to age lastFrameAt." },
+        backend: { enum: ['managed', 'user', 'app'] },
+        url: { type: 'string' },
+        title: { type: 'string' },
+        lastFrameAt: { type: 'number', description: 'When the picture last changed (ms).' },
+        frameBytes: { type: 'number' },
+        quality: { type: 'number' },
+        interactive: {
+          type: 'boolean',
+          description: 'The person may click, scroll and type in the page from the panel.',
+        },
+        viewOnly: { enum: ['task', 'closed', 'user', 'app', 'unsupported'] },
         streamError: { type: 'string' },
         frame: object({
           data: { type: 'string' },
@@ -146,10 +162,54 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
           width: { type: 'number' },
           height: { type: 'number' },
           ts: { type: 'number' },
+          pageWidth: { type: 'number' },
+          pageHeight: { type: 'number' },
         }),
       },
       additionalProperties: false,
     },
+  },
+  {
+    protocolVersion: '1.0.0',
+    name: 'browser.watch.input',
+    version: '0.2.1',
+    title: 'Use the watched page from the live panel',
+    description:
+      "The live panel's input: a click or wheel at a point of the picture (nx, ny from 0 to 1), a named key, printable text, or back / forward / reload. Only for a session on the managed backend that no task drives (status view_only otherwise, never on the person's own Chrome or an app); text and editing keys are refused while a password, code or card field has focus (status secret_field); at most 20 inputs a second (status rate_limited). Meant for the panel; agents use browser.session.act.",
+    inputSchema: object(
+      {
+        watchId: { type: 'string' },
+        event: {
+          type: 'object',
+          properties: {
+            kind: { enum: ['click', 'wheel', 'key', 'text', 'back', 'forward', 'reload'] },
+            nx: { type: 'number', minimum: 0, maximum: 1 },
+            ny: { type: 'number', minimum: 0, maximum: 1 },
+            clickCount: { enum: [1, 2] },
+            deltaX: { type: 'number' },
+            deltaY: { type: 'number' },
+            key: { type: 'string' },
+            modifiers: { type: 'array', items: { enum: ['Alt', 'Control', 'Meta', 'Shift'] } },
+            text: { type: 'string', maxLength: 64 },
+          },
+          required: ['kind'],
+          additionalProperties: false,
+        },
+      },
+      ['watchId', 'event'],
+    ),
+    outputSchema: object({
+      ...OK_ERROR,
+      status: { enum: ['view_only', 'rate_limited', 'secret_field'] },
+      viewOnly: { type: 'string' },
+      navigated: { type: 'boolean' },
+      dialog: { type: 'object' },
+    }),
+    permissions: permission(
+      'browser.watch.input',
+      'Clicks, scrolls and types in a page of a Chrome the browser extension starts, from the live panel, for the person watching.',
+      'medium',
+    ),
   },
   {
     protocolVersion: '1.0.0',
