@@ -14,10 +14,6 @@ surface for observing and controlling browser work owned by Marshal runtime sess
   to the existing `CommandRouter`.
 - `packages/extension/src/ui/runtime-panel` is an independent webpack entry and Manifest V3
   `side_panel`. The popup and options entries are unchanged.
-- `packages/runtime-extension` contributes `marshal.browser.panel.open-or-focus`; capability
-  executions invoke the host controller after a successful result, once per
-  `chatId`/`executionId`, so execution blocks can reveal an existing panel or open it without
-  another model turn.
 
 The panel does not implement a browser engine. Navigation, tab management, screenshots, and HTML
 snapshots use the extension's registered browser tools and active adapter.
