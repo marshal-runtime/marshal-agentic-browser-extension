@@ -7,6 +7,8 @@ export default tseslint.config(
     ignores: [
       '**/dist/',
       '**/build/',
+      // Plain-JS eval harness run by hand (packages/browser/bench); not part of any tsconfig project.
+      'packages/browser/bench/',
       '**/node_modules/',
       '*.config.*',
       '**/*.config.*',

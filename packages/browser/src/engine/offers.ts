@@ -42,15 +42,26 @@ export interface OfferContext {
   readonly canGoBack: boolean;
 }
 
-export function describeElement(element: SnapshotElement): string {
+/**
+ * A field that holds one of the caller's values is described by the value's NAME: the values are typed into the page
+ * but never sent to the model (the capability promises names, not values), and a typed field echoes its text back.
+ */
+function fieldValue(element: SnapshotElement, values: Readonly<Record<string, string>>): string {
+  if (!element.value) return 'empty';
+  if (isSecret(element)) return 'value "(hidden)"';
+  const held = Object.entries(values).find(
+    ([, value]) => value !== '' && element.value?.includes(value),
+  );
+  return held ? `holds the value "${held[0]}"` : `value "${clip(element.value, 60)}"`;
+}
+
+export function describeElement(
+  element: SnapshotElement,
+  values: Readonly<Record<string, string>> = {},
+): string {
   const role = element.role || element.tag || 'element';
   const bits = [`${role}${element.label ? ` "${clip(element.label, 80)}"` : ''}`];
-  if (element.kind === 'fill')
-    bits.push(
-      element.value
-        ? `value "${isSecret(element) ? '(hidden)' : clip(element.value, 60)}"`
-        : 'empty',
-    );
+  if (element.kind === 'fill') bits.push(fieldValue(element, values));
   if (element.kind === 'select' && element.value) bits.push(`now "${clip(element.value, 40)}"`);
   if (element.href) bits.push(`to ${shortUrl(element.href)}`);
   if (element.checked !== undefined)
@@ -75,7 +86,7 @@ export function buildOffers(snapshot: Snapshot, context: OfferContext): Offer[] 
       if (offscreen >= MAX_OFFSCREEN) continue;
       offscreen += 1;
     }
-    const described = describeElement(element);
+    const described = describeElement(element, context.values);
     if (element.kind === 'fill') {
       for (const [name, value] of Object.entries(context.values)) {
         if (typeOffers >= MAX_TYPE_OFFERS || element.value === value) continue;
