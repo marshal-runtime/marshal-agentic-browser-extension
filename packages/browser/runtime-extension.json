@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "identity": "@marshal/browser",
+  "displayName": "Browser",
+  "version": "0.1.0",
+  "entrypoint": "dist/runtime.cjs",
+  "moduleFormat": "commonjs-bundle-v1",
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "chromePath": {
+          "type": "string",
+          "description": "Absolute path of Chrome or Chromium; found automatically when absent."
+        },
+        "profileRoot": {
+          "type": "string",
+          "description": "Folder for the lasting agent profile; default ~/.marshal/browser/profiles."
+        },
+        "headed": {
+          "type": "boolean",
+          "description": "Show the agent profile's window (default: only on Linux with a DISPLAY)."
+        },
+        "artifactDir": {
+          "type": "string",
+          "description": "Where screenshots are saved; default <tmp>/marshal-browser/artifacts."
+        },
+        "minConfidence": {
+          "type": "number"
+        },
+        "maxSteps": {
+          "type": "number"
+        },
+        "wallMs": {
+          "type": "number"
+        },
+        "vision": {
+          "type": "boolean",
+          "description": "Attach the marked screenshot to each decision (default true)."
+        },
+        "keepStepShots": {
+          "type": "boolean",
+          "description": "Also save every step's marked screenshot as a task artifact (default false)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "agentGuidance": {
+    "purpose": "One browser for agents: a Chrome it starts with agent (lasting logins), visitor (fresh, observe-only) or offline profiles. A task runs as a code loop where each step is one marshal.models.decide call with a marked screenshot.",
+    "when": "Use browser.task for 'open X and get me Y' or a few UI steps; browser.ask for questions about one page; browser.session.* to click step by step yourself. Call browser.status to see which browsers are ready.",
+    "recipe": "browser.task {goal, startUrl, want: {data: <JSON schema>, text, screenshot}, values: {name: text to type}} returns {status, data, text, artifacts, trace}. On needs_owner, needs_input or low_confidence, read reason, candidates and the screenshot, then decide yourself.",
+    "boundaries": "Types only the caller's values (their names, not values, go to the model). Stops in code on off-site, OAuth, consent, checkout, payment or install links and never offers password fields. Does not drive the person's own Chrome yet."
+  },
+  "contributes": {
+    "capabilities": [
+      "browser.status",
+      "browser.session.open",
+      "browser.session.snapshot",
+      "browser.session.act",
+      "browser.session.screenshot",
+      "browser.session.close",
+      "browser.task",
+      "browser.ask"
+    ]
+  }
+}

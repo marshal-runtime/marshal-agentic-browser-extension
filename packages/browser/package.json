@@ -1,0 +1,30 @@
+{
+  "name": "@marshal/browser",
+  "version": "0.1.0",
+  "description": "One browser layer for agents: a Chrome it starts (agent / visitor / offline profiles), a step engine that asks marshal.models.decide one question set per step with a marked screenshot, and browser.task / ask / session.* capabilities.",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/runtime.cjs",
+  "files": [
+    "dist",
+    "runtime-extension.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rimraf dist && tsc --noEmit -p tsconfig.json && node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "esbuild": "0.25.12",
+    "rimraf": "6.0.1",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}
