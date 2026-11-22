@@ -23,6 +23,7 @@ import type { Decider } from '../src/engine/decider.js';
 import { activate } from '../src/extension.js';
 import type { BridgeClient } from '../src/user/bridge.js';
 import { createLocalBridgeClient, LocalBridge } from '../src/user/local-bridge.js';
+import { carriedExtension } from '../src/user/status.js';
 import { UserTab } from '../src/user/tab.js';
 import { chromeForTesting, launchThrowawayChrome } from '../scripts/carried-chrome.mjs';
 
@@ -113,7 +114,10 @@ describe.skipIf(!ready)(
       });
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       base = `http://127.0.0.1:${String((server.address() as { port: number }).port)}`;
-      localBridge = new LocalBridge(await freePort());
+      // Pinned to the carried extension's id, as activate() does.
+      localBridge = new LocalBridge(await freePort(), {
+        extensionId: String(carriedExtension([CARRIED]).extensionId),
+      });
       await localBridge.start();
       bridge = createLocalBridgeClient(localBridge, path.join(scratch, 'shots'));
       chrome = await launchThrowawayChrome(CHROME as string, CARRIED);
@@ -127,6 +131,15 @@ describe.skipIf(!ready)(
       await localBridge.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       rmSync(scratch, { recursive: true, force: true });
+    });
+
+    it('Chrome assigns the carried extension exactly the id the bridge is pinned to', async () => {
+      // The carried manifest's service worker is background.js; Chrome also runs its own component extensions.
+      const pinned = String(carriedExtension([CARRIED]).extensionId);
+      const workers = (await chrome.loadedExtensionIds()) as { id: string; url: string }[];
+      expect(workers.filter((worker) => worker.url.endsWith('/background.js'))).toEqual([
+        { id: pinned, url: `chrome-extension://${pinned}/background.js` },
+      ]);
     });
 
     it('browser.status: paired with the carried Marley 0.5.0 (main has no frame forwarding, so polled screenshots)', async () => {

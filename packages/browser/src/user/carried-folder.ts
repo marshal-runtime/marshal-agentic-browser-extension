@@ -96,6 +96,7 @@ export function installCarriedExtension(
       folder: target,
       ...(lock.version ? { version: lock.version } : {}),
       ...(lock.commit ? { commit: lock.commit } : {}),
+      ...(source.extensionId ? { extensionId: source.extensionId } : {}),
     };
   } catch (error) {
     return {

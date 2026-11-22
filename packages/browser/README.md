@@ -150,7 +150,9 @@ installing `@marshal/browser` alone is enough (no `@zygstinct/browser-bridge`):
   `chromeExtensionDir` (default `~/.marshal/browser/chrome-extension`). That folder is the one setup names for
   Load unpacked; a new pin replaces it in one rename, and Chrome picks it up on its next start or Reload.
 - **The bridge socket** (`src/user/local-bridge.ts`, ported from that repo's `marshal-extension`): `ws://127.0.0.1:17373/bridge`
-  (`bridgePort` to change it), loopback only, `chrome-extension://` origins only, the newest browser wins, a browser
+  (`bridgePort` to change it), loopback only, only the carried extension's own origin
+  (`chrome-extension://<id>`, the id fixed by its manifest `key` and recorded in the lock; another installed extension is
+  refused), masked client frames only (RFC 6455; an unmasked frame closes with 1002), the newest browser wins, a browser
   silent for 65 s is dropped. It offers the user backend the `browserbridge.*` verbs it uses and no `evaluate`;
   `tabs.open`/`tabs.navigate` take only http(s) (or back/forward/reload). Screenshots go to private 0600 files.
   `/health` answers `{"service":"marshal-browser"}`.

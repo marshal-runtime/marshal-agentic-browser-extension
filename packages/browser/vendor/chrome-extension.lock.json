@@ -5,6 +5,7 @@
   "path": "chrome-extension",
   "channel": "developer",
   "version": "0.5.0",
+  "extensionId": "hoeikcjhdgpjcbdjjkkfngdencimlnok",
   "files": {
     "background.js": "3eff12c1054db57bee1739d989a69f0c173b374ced59b5729330ccbb555f017b",
     "icons/icon128.png": "995b42005cc13da886e384714004d29f649e8e9043697f7a8ea63ddc32a140b6",

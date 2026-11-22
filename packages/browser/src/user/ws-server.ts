@@ -1,7 +1,8 @@
 /**
  * A minimal RFC 6455 WebSocket server (text frames, ping/pong, close, fragmentation) for the local bridge to the Marley
  * Chrome extension. Ported from zyg-edge/marley-browser-extension marshal-extension/src/ws-server.js (main 48cf63f);
- * the same rules: it listens on loopback only, upgrades only `path`, and only for an Origin `acceptOrigin` allows. No
+ * the same rules: it listens on loopback only, upgrades only `path`, and only for an Origin `acceptOrigin` allows;
+ * an unmasked client frame closes the connection (1002), as RFC 6455 requires. No
  * dependencies, so the bundle needs only `http` and `node:crypto` (both in the extension loader's allow-list).
  */
 import { createHash } from 'node:crypto';
@@ -59,7 +60,8 @@ export class WsConnection extends EventEmitter {
     const second = buf[1] ?? 0;
     const fin = (first & 0x80) !== 0;
     const opcode = first & 0x0f;
-    const masked = (second & 0x80) !== 0;
+    // RFC 6455 5.1: a client masks every frame; a server closes on an unmasked one (1002, protocol error).
+    if ((second & 0x80) === 0) return this.fail(1002, 'unmasked client frame');
     let length = second & 0x7f;
     let offset = 2;
     if (length === 126) {
@@ -74,18 +76,12 @@ export class WsConnection extends EventEmitter {
       offset = 10;
     }
     if (length > MAX_MESSAGE_BYTES) return this.fail(1009, 'message too big');
-    const maskBytes = masked ? 4 : 0;
-    if (buf.length < offset + maskBytes + length) return null;
-    let payload = buf.subarray(offset + maskBytes, offset + maskBytes + length);
-    if (masked) {
-      const mask = buf.subarray(offset, offset + 4);
-      const unmasked = Buffer.allocUnsafe(length);
-      for (let i = 0; i < length; i++) unmasked[i] = (payload[i] ?? 0) ^ (mask[i & 3] ?? 0);
-      payload = unmasked;
-    } else {
-      payload = Buffer.from(payload);
-    }
-    this.buffer = buf.subarray(offset + maskBytes + length);
+    if (buf.length < offset + 4 + length) return null;
+    const mask = buf.subarray(offset, offset + 4);
+    const masked = buf.subarray(offset + 4, offset + 4 + length);
+    const payload = Buffer.allocUnsafe(length);
+    for (let i = 0; i < length; i++) payload[i] = (masked[i] ?? 0) ^ (mask[i & 3] ?? 0);
+    this.buffer = buf.subarray(offset + 4 + length);
     return { fin, opcode, payload };
   }
 

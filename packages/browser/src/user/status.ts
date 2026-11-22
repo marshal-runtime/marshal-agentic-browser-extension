@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from 'fs';
 import path from 'node:path';
 import type { BridgeClient, BridgeStatus } from './bridge.js';
+import { extensionIdOf } from './extension-id.js';
 
 export type UserBrowserReason =
   | 'paired'
@@ -74,6 +75,8 @@ export interface CarriedExtension {
   readonly folder: string | null;
   readonly version?: string;
   readonly commit?: string;
+  /** Chrome's fixed id for it (from its manifest key): the only origin the bridge accepts. */
+  readonly extensionId?: string;
   /** Set when the folder is the install's own (it moves on update): why the stable copy could not be made. */
   readonly folderNote?: string;
 }
@@ -91,6 +94,8 @@ export function carriedExtension(
 ): CarriedExtension {
   const folder = candidates.find((candidate) => existsSync(path.join(candidate, 'manifest.json')));
   if (!folder) return { folder: null };
+  const id = extensionIdOf(folder);
+  const extensionId = id ? { extensionId: id } : {};
   try {
     const lock = JSON.parse(
       readFileSync(path.join(folder, '..', 'chrome-extension.lock.json'), 'utf8'),
@@ -99,9 +104,10 @@ export function carriedExtension(
       folder,
       ...(typeof lock.version === 'string' ? { version: lock.version } : {}),
       ...(typeof lock.commit === 'string' ? { commit: lock.commit } : {}),
+      ...extensionId,
     };
   } catch {
-    return { folder };
+    return { folder, ...extensionId };
   }
 }
 

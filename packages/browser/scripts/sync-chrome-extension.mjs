@@ -7,6 +7,7 @@
 //
 //   node scripts/sync-chrome-extension.mjs --repo <checkout of zyg-edge/marley-browser-extension> --commit <sha on main>
 //   node scripts/sync-chrome-extension.mjs --check [--dir <folder>]   # the folder (default vendor/chrome-extension) matches the lock
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { log } from 'node:console';
@@ -64,6 +65,15 @@ export function hashTree(dir) {
   return { files, treeSha256: tree };
 }
 
+/** Chrome's id for a manifest with a `key`: sha256 of the DER key, first 32 hex digits mapped to a-p. */
+export function extensionIdFromKey(key) {
+  return createHash('sha256')
+    .update(Buffer.from(key, 'base64'))
+    .digest('hex')
+    .slice(0, 32)
+    .replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + parseInt(digit, 16)));
+}
+
 /** The developer channel: the local Marshal socket opens only when both hold. */
 export function checkDeveloperChannel(dir) {
   const channel = readFileSync(path.join(dir, 'install-channel.js'), 'utf8');
@@ -73,6 +83,9 @@ export function checkDeveloperChannel(dir) {
     );
   const manifest = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
   if ('update_url' in manifest) throw new Error('manifest.json has update_url (a store build)');
+  // The bridge accepts only this extension's own origin, so its id must be fixed by a manifest key.
+  if (typeof manifest.key !== 'string' || !manifest.key)
+    throw new Error('manifest.json has no key (the extension id would not be fixed)');
   return manifest;
 }
 
@@ -92,6 +105,9 @@ function check(dir) {
   for (const rel of Object.keys(actual.files))
     if (!(rel in lock.files)) problems.push(`${rel}: not in the lock`);
   if (actual.treeSha256 !== lock.treeSha256) problems.push('tree hash differs');
+  const manifest = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  if (lock.extensionId !== extensionIdFromKey(manifest.key))
+    problems.push('extensionId differs from the manifest key');
   if (problems.length)
     throw new Error(`${dir} does not match ${LOCK}:\n  ${problems.join('\n  ')}`);
   log(
@@ -124,6 +140,7 @@ function sync(repo, commit) {
       path: FOLDER,
       channel: 'developer',
       version: manifest.version,
+      extensionId: extensionIdFromKey(manifest.key),
       files,
       treeSha256,
     };

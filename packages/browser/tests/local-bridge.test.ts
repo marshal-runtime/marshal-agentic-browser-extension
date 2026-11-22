@@ -11,9 +11,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BridgeError } from '../src/user/bridge.js';
 import { createLocalBridgeClient, LocalBridge, portHolder } from '../src/user/local-bridge.js';
-import { userBrowserStatus } from '../src/user/status.js';
+import { extensionIdFromKey } from '../src/user/extension-id.js';
+import { carriedExtension, userBrowserStatus } from '../src/user/status.js';
 
-const ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+const ID = 'abcdefghijklmnopabcdefghijklmnop';
+const ORIGIN = `chrome-extension://${ID}`;
 
 /** A free loopback port (bound and released). */
 async function freePort(): Promise<number> {
@@ -33,6 +35,10 @@ interface Client {
     timeoutMs?: number,
   ): Promise<Record<string, unknown>>;
   closed: Promise<void>;
+  /** The close code the server sent, once it sent one. */
+  closeCode?: number;
+  /** A text frame without a mask (no browser sends one). */
+  sendUnmasked(message: Record<string, unknown>): void;
 }
 
 /** Opens a WebSocket (masked client frames, as a browser sends) with the given Origin; rejects with the HTTP status if refused. */
@@ -90,6 +96,8 @@ function connect(
           if (opcode === 0x1) {
             messages.push(JSON.parse(payload.toString('utf8')) as Record<string, unknown>);
             for (const listener of listeners) listener();
+          } else if (opcode === 0x8 && payload.length >= 2) {
+            client.closeCode = payload.readUInt16BE(0);
           }
         }
       });
@@ -97,6 +105,10 @@ function connect(
         socket,
         messages,
         closed,
+        sendUnmasked(message) {
+          const payload = Buffer.from(JSON.stringify(message));
+          socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+        },
         send(message) {
           const payload = Buffer.from(JSON.stringify(message));
           const mask = randomBytes(4);
@@ -175,7 +187,7 @@ async function started(
   port = 0,
   options: ConstructorParameters<typeof LocalBridge>[1] = {},
 ): Promise<LocalBridge> {
-  const bridge = new LocalBridge(port, options);
+  const bridge = new LocalBridge(port, { extensionId: ID, ...options });
   bridges.push(bridge);
   await bridge.start();
   return bridge;
@@ -190,6 +202,61 @@ async function until(check: () => unknown, timeoutMs = 3000): Promise<void> {
 }
 
 describe('carried bridge socket: who may connect', () => {
+  it('accepts only the carried extension: another installed extension, a lookalike or no pinned id is refused', async () => {
+    const { port } = (await started()).status();
+    for (const origin of [
+      'chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      `chrome-extension://${ID.toUpperCase()}`,
+      `chrome-extension://${ID}x`,
+      `chrome-extension://${ID}.evil.example`,
+      `chrome-extension://${ID.slice(0, 31)}`,
+      `https://${ID}`,
+    ])
+      await expect(connect(port, origin), origin).rejects.toThrow(/refused 403/);
+    const right = await connect(port, ORIGIN);
+    right.socket.destroy();
+    // No pinned id (no carried folder) or a malformed one: nobody connects.
+    for (const extensionId of [undefined, '', 'not-an-id', ID.slice(0, 31)]) {
+      const unpinned = new LocalBridge(0, extensionId === undefined ? {} : { extensionId });
+      bridges.push(unpinned);
+      await unpinned.start();
+      await expect(connect(unpinned.status().port, ORIGIN), String(extensionId)).rejects.toThrow(
+        /refused 403/,
+      );
+      // Not even the origin that spells the malformed id itself.
+      if (extensionId)
+        await expect(
+          connect(unpinned.status().port, `chrome-extension://${extensionId}`),
+          extensionId,
+        ).rejects.toThrow(/refused 403/);
+    }
+  });
+
+  it("the pinned id is Chrome's id of the carried folder: from its manifest key, as the lock records", () => {
+    const carried = carriedExtension();
+    const folder = String(carried.folder);
+    const { key } = JSON.parse(readFileSync(path.join(folder, 'manifest.json'), 'utf8')) as {
+      key: string;
+    };
+    expect(carried.extensionId).toBe(extensionIdFromKey(key));
+    expect(carried.extensionId).toMatch(/^[a-p]{32}$/);
+    const lock = JSON.parse(
+      readFileSync(path.join(folder, '..', 'chrome-extension.lock.json'), 'utf8'),
+    ) as {
+      extensionId: string;
+    };
+    expect(lock.extensionId).toBe(carried.extensionId);
+  });
+
+  it('an unmasked client frame closes the connection with 1002 and is not read (RFC 6455)', async () => {
+    const bridge = await started();
+    const client = await connect(bridge.status().port, ORIGIN);
+    client.sendUnmasked({ type: 'hello', extensionVersion: '0.5.0' });
+    await client.closed;
+    expect(client.closeCode).toBe(1002);
+    expect(bridge.status().connected).toBe(false);
+  });
+
   it('listens on 127.0.0.1 at /bridge and answers /health as marshal-browser', async () => {
     const bridge = await started();
     const status = bridge.status();

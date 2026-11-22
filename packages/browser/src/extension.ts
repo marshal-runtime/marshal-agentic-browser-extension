@@ -20,14 +20,17 @@ export async function activate(
 ): Promise<RuntimeExtensionActivation> {
   const execute = context.execute.bind(context);
   const configuration = context.configuration;
-  // A port that is taken is reported by browser.status (port_in_use) and retried; activation never fails on it.
-  const bridge = new LocalBridge(configuration.bridgePort ?? BRIDGE_PORT);
-  await bridge.start();
   // The Chrome extension's folder must outlive this install (each update installs elsewhere): a stable copy.
   const carried = installCarriedExtension(
     carriedExtension(),
     configuration.chromeExtensionDir ?? DEFAULT_CHROME_EXTENSION_DIR,
   );
+  // Only the carried extension (its fixed id) may connect to the bridge. A port that is taken is reported by
+  // browser.status (port_in_use) and retried; activation never fails on it.
+  const bridge = new LocalBridge(configuration.bridgePort ?? BRIDGE_PORT, {
+    ...(carried.extensionId ? { extensionId: carried.extensionId } : {}),
+  });
+  await bridge.start();
   const client = createLocalBridgeClient(
     bridge,
     path.join(configuration.artifactDir ?? path.join(os.tmpdir(), 'marshal-browser'), 'user-shots'),

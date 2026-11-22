@@ -102,7 +102,7 @@ describe('carried Chrome extension', () => {
     }
   });
 
-  it('the developer check refuses a site build, a store build (update_url), and the sync refuses links', () => {
+  it('the developer check refuses a site build, a store build (update_url), a manifest without a key, and the sync refuses links', () => {
     const make = (channel: string, manifest: Record<string, unknown>): string => {
       const dir = mkdtempSync(path.join(os.tmpdir(), 'mb-carry-'));
       writeFileSync(path.join(dir, 'install-channel.js'), channel);
@@ -110,20 +110,28 @@ describe('carried Chrome extension', () => {
       return dir;
     };
     expect(() =>
-      checkDeveloperChannel(make('export const SITE_INSTALL = false;\n', { version: '1' })),
+      checkDeveloperChannel(
+        make('export const SITE_INSTALL = false;\n', { version: '1', key: 'AAAA' }),
+      ),
     ).not.toThrow();
     expect(() =>
-      checkDeveloperChannel(make('export const SITE_INSTALL = true;\n', { version: '1' })),
+      checkDeveloperChannel(
+        make('export const SITE_INSTALL = true;\n', { version: '1', key: 'AAAA' }),
+      ),
     ).toThrow(/site or store build/);
     expect(() =>
       checkDeveloperChannel(
         make('export const SITE_INSTALL = false;\n', {
           version: '1',
+          key: 'AAAA',
           update_url: 'https://clients2.google.com/',
         }),
       ),
     ).toThrow(/update_url/);
-    const linked = make('export const SITE_INSTALL = false;\n', { version: '1' });
+    expect(() =>
+      checkDeveloperChannel(make('export const SITE_INSTALL = false;\n', { version: '1' })),
+    ).toThrow(/no key/);
+    const linked = make('export const SITE_INSTALL = false;\n', { version: '1', key: 'AAAA' });
     mkdirSync(path.join(linked, 'sub'));
     symlinkSync('/etc/hosts', path.join(linked, 'sub', 'hosts'));
     expect(() => listFiles(linked)).toThrow(/symbolic link/);

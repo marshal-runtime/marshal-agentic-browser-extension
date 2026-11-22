@@ -3,7 +3,8 @@
  * (developer install, `dist/chrome-extension`) connects to, and a `BridgeClient` over it. Ported from
  * zyg-edge/marley-browser-extension marshal-extension/src/bridge.js and capabilities.js (main 48cf63f), which the
  * separate `@zygstinct/browser-bridge` extension served before. Rules kept from there:
- *   - it listens on 127.0.0.1 only, at `/bridge`, and accepts only `chrome-extension://` origins;
+ *   - it listens on 127.0.0.1 only, at `/bridge`, and accepts only the carried extension's own origin
+ *     (`chrome-extension://<id from its manifest key>`), never another installed extension;
  *   - the newest browser to connect wins, and one silent for 65 s is dropped (it pings every 20 s);
  *   - tabs.open / tabs.navigate take only http(s) addresses (or back / forward / reload).
  * There is no `evaluate` verb here: the user backend never runs page JavaScript in the person's Chrome.
@@ -18,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { BridgeError, codeOf, type BridgeClient, type BridgeStatus } from './bridge.js';
 import type { CarriedExtension } from './status.js';
+import { EXTENSION_ID } from './extension-id.js';
 import { HEALTH_SERVICE, startWsServer, type WsConnection } from './ws-server.js';
 
 export const BRIDGE_PORT = 17373;
@@ -64,6 +66,12 @@ export class LocalBridge {
     private readonly options: {
       readonly idleTimeoutMs?: number;
       readonly rebindEveryMs?: number;
+      /**
+       * The only Chrome extension allowed to connect: the carried Marley extension's fixed id (from its manifest key).
+       * Without one, no browser can connect. Any other installed extension would otherwise win as the newest browser
+       * and receive every request, typed values included.
+       */
+      readonly extensionId?: string;
     } = {},
   ) {}
 
@@ -83,7 +91,10 @@ export class LocalBridge {
         host: HOST,
         port: this.port,
         path: PATH,
-        acceptOrigin: (origin) => origin.startsWith('chrome-extension://'),
+        acceptOrigin: (origin) => {
+          const id = this.options.extensionId;
+          return id !== undefined && EXTENSION_ID.test(id) && origin === `chrome-extension://${id}`;
+        },
         onConnection: (connection) => {
           this.attach(connection);
         },

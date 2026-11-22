@@ -119,6 +119,25 @@ export async function launchThrowawayChrome(binary, folder) {
     process: child,
     profile,
     extensionId: id,
+    /** The ids Chrome itself assigned to running extension service workers ({id, url}), read from Chrome, not computed. */
+    async loadedExtensionIds() {
+      const until = Date.now() + 10_000;
+      for (;;) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        const ids = [
+          ...new Map(
+            targetInfos
+              .filter(
+                (target) =>
+                  target.type === 'service_worker' && target.url.startsWith('chrome-extension://'),
+              )
+              .map((target) => [target.url, { id: new URL(target.url).host, url: target.url }]),
+          ).values(),
+        ];
+        if (ids.length || Date.now() > until) return ids;
+        await sleep(100);
+      }
+    },
     /** What the person does in the popup: enter the address in "Developer: Marshal bridge" (an input `change`). */
     async setBridgeAddress(address) {
       const { targetId } = await cdp.send('Target.createTarget', {
