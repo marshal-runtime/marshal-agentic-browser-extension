@@ -4,7 +4,8 @@
  * (the watch panel, a recorder) onto one: it starts on the first consumer, restarts when a consumer asks for wider,
  * taller or better frames (it never shrinks a running screencast another consumer holds), and stops (and drops its
  * event listener) when the last consumer stops. Nothing runs while nobody consumes. Chrome never upscales a frame: a
- * request larger than the page gets the page's own pixels.
+ * request larger than the page gets the page's own pixels. Frames taken while the engine's numbered decision marks are
+ * on the page are dropped (acknowledged, never delivered): the marks are for the model, not for the person or a video.
  */
 import type { CdpEvent } from './cdp.js';
 import type { ScreencastFrameMeta, ScreencastHandle, ScreencastOptions } from '../target.js';
@@ -50,6 +51,8 @@ export class ScreencastHub {
   constructor(
     private readonly channel: ScreencastChannel,
     private readonly sessionId: string,
+    /** True while frames must not reach consumers (the decision marks are on the page); they are still acknowledged. */
+    private readonly held: () => boolean = () => false,
   ) {}
 
   /** True while Chrome is screencasting for at least one consumer. */
@@ -190,6 +193,7 @@ export class ScreencastHub {
     }
     const data = params['data'];
     if (typeof data !== 'string' || !data) return;
+    if (this.held()) return;
     const metadata = (params['metadata'] ?? {}) as {
       timestamp?: number;
       deviceWidth?: number;

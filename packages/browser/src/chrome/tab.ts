@@ -42,14 +42,29 @@ import type {
   LogKind,
   Modifier,
   PageDialog,
+  PageLocation,
+  PanelFit,
   PanelInput,
+  PointerMark,
   PressKey,
+  Still,
   Viewport,
 } from '../target.js';
 import { CAPTURE_MAX_CSS, EDITING_KEYS } from '../target.js';
 
 const VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 20_000;
+/** A still for the live panel: PNG while it stays small, else a high-quality JPEG; never more than this (base64). */
+const STILL_PNG_MAX_CHARS = 1_600_000;
+const STILL_MAX_CHARS = 2_800_000;
+/**
+ * A still that Chrome does not answer within this long is given up (the frame it was to replace is shown). Chrome
+ * never answers a capture when the page navigates under it; without the bound, the capture would hold every later
+ * screenshot and resize for the 30 s call timeout.
+ */
+const STILL_TIMEOUT_MS = 1_500;
+/** Frames are held back this long after the decision marks leave the page (a frame in flight may still show them). */
+const MARKS_GRACE_MS = 120;
 const LOG_LIMIT = 1_000;
 const LOG_TEXT = 2_000;
 const LOG_URL = 1_000;
@@ -112,6 +127,17 @@ export class ManagedTab implements Target {
   // The page's CSS viewport, for scrolling by a screenful (browser.session.viewport changes it).
   private viewportWidth: number = VIEWPORT.width;
   private viewportHeight: number = VIEWPORT.height;
+  /** The pixel ratio the live panel asked for (fitToPanel); screenshots are scaled back so their size never depends on who watches. */
+  private panelScale = 1;
+  /** The caller's own pixel ratio (browser.session.viewport), which screenshots keep. */
+  private callerScale = 1;
+  /** The caller set the viewport: the live panel never resizes it. */
+  private pinned = false;
+  private panelFitted = false;
+  /** Above zero while the decision marks are drawn on the page, and until when frames stay held back after. */
+  private marking = 0;
+  private marksUntil = 0;
+  private lastPointer: PointerMark | null = null;
   private hub: ScreencastHub | null = null;
   private dialog: PageDialog | null = null;
   private readonly dialogWaiters = new Set<(dialog: PageDialog) => void>();
@@ -327,7 +353,23 @@ export class ManagedTab implements Target {
     return { entries, dropped, observing: [...this.observing] };
   }
 
-  async setViewport(viewport: Viewport): Promise<void> {
+  /**
+   * Captures and viewport changes run one at a time. Chrome puts back the device metrics it saw when a capture began,
+   * so a resize that lands inside a capture would be undone (seen: a page left at the panel's size after the panel let
+   * go, because a still was being taken).
+   */
+  private surfaceChain: Promise<unknown> = Promise.resolve();
+  private surface<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.surfaceChain.then(run, run);
+    this.surfaceChain = next.catch(() => undefined);
+    return next;
+  }
+
+  setViewport(viewport: Viewport): Promise<void> {
+    return this.surface(() => this.applyViewport(viewport));
+  }
+
+  private async applyViewport(viewport: Viewport): Promise<void> {
     const touch = viewport.touch ?? false;
     await this.send('Emulation.setDeviceMetricsOverride', {
       width: viewport.width,
@@ -341,6 +383,64 @@ export class ManagedTab implements Target {
     });
     this.viewportHeight = viewport.height;
     this.viewportWidth = viewport.width;
+    this.callerScale = viewport.deviceScaleFactor ?? 1;
+    this.panelScale = 1;
+    this.pinned = true;
+    this.panelFitted = false;
+  }
+
+  viewport(): { width: number; height: number; deviceScaleFactor: number; pinned: boolean } {
+    return {
+      width: this.viewportWidth,
+      height: this.viewportHeight,
+      deviceScaleFactor: this.pinned ? this.callerScale : this.panelScale,
+      pinned: this.pinned,
+    };
+  }
+
+  /**
+   * Sizes the page to the live panel, like a browser pane: the panel's CSS size and, on a high-density screen, twice
+   * the pixels. Never when the caller set the viewport. Null puts the default size back (only after a fit).
+   */
+  fitToPanel(fit: PanelFit | null): Promise<boolean> {
+    return this.surface(() => this.applyFit(fit));
+  }
+
+  private async applyFit(fit: PanelFit | null): Promise<boolean> {
+    if (this.pinned || this.closed) return false;
+    if (fit === null) {
+      if (!this.panelFitted) return true;
+      await this.send('Emulation.setDeviceMetricsOverride', {
+        width: VIEWPORT.width,
+        height: VIEWPORT.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      this.viewportWidth = VIEWPORT.width;
+      this.viewportHeight = VIEWPORT.height;
+      this.panelScale = 1;
+      this.panelFitted = false;
+      return true;
+    }
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width: fit.width,
+      height: fit.height,
+      deviceScaleFactor: fit.deviceScaleFactor,
+      mobile: false,
+    });
+    this.viewportWidth = fit.width;
+    this.viewportHeight = fit.height;
+    this.panelScale = fit.deviceScaleFactor;
+    this.panelFitted = true;
+    return true;
+  }
+
+  get pointer(): PointerMark | null {
+    return this.lastPointer;
+  }
+
+  get screencastConsumers(): number {
+    return this.hub?.consumerCount ?? 0;
   }
 
   static async open(launcher: ChromeLauncher, profile: ManagedProfile): Promise<ManagedTab> {
@@ -568,6 +668,7 @@ export class ManagedTab implements Target {
     if (!point?.ok || point.x === undefined || point.y === undefined) {
       throw new Error(point?.error ?? 'element-gone');
     }
+    this.lastPointer = { x: point.x, y: point.y, at: Date.now() };
     if (!point.hit) {
       // Something covers the element: click it in the page instead of clicking the cover.
       const done = (await this.evaluate(jsClickScript(node))) as { ok?: boolean } | undefined;
@@ -748,13 +849,20 @@ export class ManagedTab implements Target {
     return { ok: true, navigated: navigation !== null };
   }
 
-  async screenshot(options: ScreenshotOptions = {}): Promise<Shot> {
+  screenshot(options: ScreenshotOptions = {}): Promise<Shot> {
+    return this.surface(() => this.capture(options));
+  }
+
+  private async capture(options: ScreenshotOptions): Promise<Shot> {
     const format = options.format ?? 'png';
     const marks = options.marks?.filter((element) => !element.offscreen) ?? [];
-    if (marks.length)
+    if (marks.length) {
+      // The live view holds its frames back while the marks are on the page: they are for the decision, not the person.
+      this.marking += 1;
       await this.evaluate(
         drawMarksScript(marks.map((element) => ({ node: element.node, ref: element.ref }))),
       );
+    }
     try {
       let clip: Record<string, number> | undefined;
       if (options.fullPage) {
@@ -790,6 +898,24 @@ export class ManagedTab implements Target {
             scale: options.width / view.clientWidth,
           };
       }
+      if (this.panelScale !== 1) {
+        // The live panel doubled the page's pixels: a screenshot keeps the size it has when nobody watches.
+        if (!clip) {
+          const metrics = await this.send('Page.getLayoutMetrics');
+          const view = metrics['cssVisualViewport'] as
+            | { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
+            | undefined;
+          if (view)
+            clip = {
+              x: view.pageX,
+              y: view.pageY,
+              width: view.clientWidth,
+              height: view.clientHeight,
+              scale: 1,
+            };
+        }
+        if (clip) clip['scale'] = (clip['scale'] ?? 1) / this.panelScale;
+      }
       const shot = await this.send('Page.captureScreenshot', {
         format,
         ...(format === 'jpeg' ? { quality: options.quality ?? 70 } : {}),
@@ -802,8 +928,55 @@ export class ManagedTab implements Target {
         mimeType: format === 'jpeg' ? 'image/jpeg' : 'image/png',
       };
     } finally {
-      if (marks.length) await this.evaluate(REMOVE_MARKS_SCRIPT).catch(() => undefined);
+      if (marks.length) {
+        await this.evaluate(REMOVE_MARKS_SCRIPT).catch(() => undefined);
+        this.marking -= 1;
+        this.marksUntil = Date.now() + MARKS_GRACE_MS;
+      }
     }
+  }
+
+  /** True while the decision marks are (or just were) on the page. */
+  private marksOn(): boolean {
+    return this.marking > 0 || Date.now() < this.marksUntil;
+  }
+
+  /**
+   * The page as it rests, at its own device pixels, for the live panel to sharpen its picture once frames stop. A PNG
+   * while it stays small (text stays crisp), else a high-quality JPEG. Null while the decision marks are on the page,
+   * a dialog is open, the tab is closed, the picture is too large or Chrome did not answer in time.
+   */
+  still(): Promise<Still | null> {
+    return this.surface(() => this.captureStill());
+  }
+
+  private async captureStill(): Promise<Still | null> {
+    if (this.closed || this.dialog || this.marksOn()) return null;
+    const grab = async (format: 'png' | 'jpeg'): Promise<string> => {
+      const shot = await this.send(
+        'Page.captureScreenshot',
+        { format, ...(format === 'jpeg' ? { quality: 92 } : { optimizeForSpeed: true }) },
+        STILL_TIMEOUT_MS,
+      ).catch(() => null);
+      const data = shot?.['data'];
+      return typeof data === 'string' ? data : '';
+    };
+    let mimeType: Still['mimeType'] = 'image/png';
+    let data = await grab('png');
+    if (data.length > STILL_PNG_MAX_CHARS) {
+      mimeType = 'image/jpeg';
+      data = await grab('jpeg');
+    }
+    if (!data || data.length > STILL_MAX_CHARS || this.marksOn()) return null;
+    const scale = this.pinned ? this.callerScale : this.panelScale;
+    return {
+      data,
+      mimeType,
+      width: Math.round(this.viewportWidth * scale),
+      height: Math.round(this.viewportHeight * scale),
+      pageWidth: this.viewportWidth,
+      pageHeight: this.viewportHeight,
+    };
   }
 
   async fullText(): Promise<string> {
@@ -812,13 +985,26 @@ export class ManagedTab implements Target {
   }
 
   /** Address and title for the live panel's bar; one small evaluate, refused (thrown) while a dialog is open. */
-  async location(): Promise<{ url: string; title: string }> {
+  async location(): Promise<PageLocation> {
     const value = (await this.evaluate(
-      'return [String(location.href), String(document.title)];',
-    )) as [string, string] | undefined;
+      'return [String(location.href), String(document.title), document.readyState !== "complete"];',
+    )) as [string, string, boolean] | undefined;
+    const history = await this.send('Page.getNavigationHistory').catch(() => null);
+    const index = history?.['currentIndex'];
+    const entries = history?.['entries'];
     return {
       url: String(value?.[0] ?? '').slice(0, 2_000),
       title: String(value?.[1] ?? '').slice(0, 300),
+      loading: value?.[2] === true,
+      ...(typeof index === 'number' && Array.isArray(entries)
+        ? {
+            // The blank page every tab starts on is nowhere to go back to.
+            canGoBack: (entries as { url?: unknown }[])
+              .slice(0, index)
+              .some((entry) => entry.url !== 'about:blank'),
+            canGoForward: index < entries.length - 1,
+          }
+        : {}),
     };
   }
 
@@ -895,7 +1081,7 @@ export class ManagedTab implements Target {
     onFrame: (jpegBase64: string, meta: ScreencastFrameMeta) => void,
   ): Promise<ScreencastHandle> {
     if (this.isClosed) throw new Error('BROWSER_SCREENCAST_FAILED: the tab is closed');
-    this.hub ??= new ScreencastHub(this.cdp, this.sessionId);
+    this.hub ??= new ScreencastHub(this.cdp, this.sessionId, () => this.marksOn());
     return this.hub.subscribe(opts, onFrame);
   }
 
