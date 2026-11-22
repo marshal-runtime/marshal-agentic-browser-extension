@@ -66,7 +66,47 @@ export type TargetAction =
   | { readonly kind: 'scroll'; readonly direction: 'down' | 'up' }
   | { readonly kind: 'navigate'; readonly url: string }
   | { readonly kind: 'back' }
-  | { readonly kind: 'wait'; readonly ms: number };
+  | { readonly kind: 'wait'; readonly ms: number }
+  // Session-only kinds: a caller driving step by step (browser.session.act) may use them; the task engine never offers
+  // them. A backend that cannot do one answers `unsupported` (never a silent substitute).
+  | { readonly kind: 'forward' }
+  | { readonly kind: 'reload' }
+  | { readonly kind: 'hover'; readonly ref: string }
+  | { readonly kind: 'press'; readonly key: PressKey; readonly modifiers: readonly Modifier[] }
+  | { readonly kind: 'upload'; readonly ref: string; readonly paths: readonly string[] };
+
+/**
+ * Named keys only. A printable character goes through `type` (which every backend checks against secret fields), so a
+ * key press can never spell text into a password field or paste the clipboard (no Meta+V: V is not a named key).
+ */
+export const PRESS_KEYS = [
+  'Enter',
+  'Tab',
+  'Escape',
+  'Backspace',
+  'Delete',
+  'Space',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+] as const;
+export type PressKey = (typeof PRESS_KEYS)[number];
+/** Keys that change the text of a focused field: refused while a secret field has focus. */
+export const EDITING_KEYS: ReadonlySet<PressKey> = new Set(['Backspace', 'Delete', 'Space']);
+export const MODIFIERS = ['Alt', 'Control', 'Meta', 'Shift'] as const;
+export type Modifier = (typeof MODIFIERS)[number];
+
+/** A session-only kind or operation the backend has no way to do. */
+export const unsupportedOn = (backend: BackendKind, what: string): ActOutcome => ({
+  ok: false,
+  unsupported: true,
+  error: `unsupported_on_backend: ${what} is not available on the ${backend} backend`,
+});
 
 export interface ActOutcome {
   readonly ok: boolean;
@@ -77,7 +117,38 @@ export interface ActOutcome {
   readonly needsRealInput?: boolean;
   /** The action used real keyboard/mouse input or brought the app to the front (allowed by the caller). */
   readonly realInput?: boolean;
+  /** The backend cannot do this kind of action (`unsupported_on_backend`). */
+  readonly unsupported?: boolean;
+  /** A JavaScript dialog (alert, confirm, prompt, beforeunload) opened during the action and waits for an answer. */
+  readonly dialog?: PageDialog;
 }
+
+export interface PageDialog {
+  readonly type: string;
+  readonly message: string;
+  readonly defaultPrompt?: string;
+  readonly url?: string;
+}
+
+/** One observed console message or network request (no headers, bodies or cookies). */
+export type LogEntry =
+  | {
+      readonly kind: 'console';
+      readonly at: number;
+      readonly level: string;
+      readonly text: string;
+      readonly url?: string;
+    }
+  | {
+      readonly kind: 'network';
+      readonly at: number;
+      readonly method: string;
+      readonly url: string;
+      readonly resourceType?: string;
+      readonly status?: number;
+      readonly failed?: string;
+    };
+export type LogKind = 'console' | 'network';
 
 export interface ScreenshotOptions {
   /** Draw each listed element's ref as a numbered box on the image (the "marked screenshot"). */
@@ -88,7 +159,32 @@ export interface ScreenshotOptions {
   readonly width?: number;
   /** JPEG quality, 0-100 (default 70). */
   readonly quality?: number;
+  /** A region of the page in CSS pixels, captured at scale 1 even beyond the viewport (managed only). */
+  readonly clip?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
 }
+
+/** Tallest page or clip a screenshot takes, in CSS pixels (real landing pages measured 16,942 and 20,771). */
+export const CAPTURE_MAX_CSS = 30_000;
+
+/** A device size for the page: CSS pixels, device pixel ratio, mobile layout and touch input. */
+export interface Viewport {
+  readonly width: number;
+  readonly height: number;
+  readonly deviceScaleFactor?: number;
+  readonly mobile?: boolean;
+  readonly touch?: boolean;
+}
+export const VIEWPORT_LIMITS = {
+  minSide: 100,
+  maxWidth: 5000,
+  maxHeight: 10_000,
+  maxScale: 4,
+} as const;
 
 /**
  * The image attached to every decision: a 768-wide JPEG at quality 70. Measured on real pages (marshal-sdk #174 bench):
@@ -132,4 +228,22 @@ export interface Target {
     opts: ScreencastOptions,
     onFrame: (jpegBase64: string, meta: ScreencastFrameMeta) => void,
   ): Promise<ScreencastHandle>;
+  // Step-by-step operations (browser.session.*). Absent on a backend that cannot do them: the caller gets
+  // `unsupported_on_backend`.
+  /** The page's HTML (document.documentElement.outerHTML), capped by the backend. */
+  html?(): Promise<string>;
+  /** Runs a JavaScript expression in the page and returns its JSON value (a promise is awaited). */
+  evaluateExpression?(expression: string, timeoutMs: number): Promise<unknown>;
+  /** Starts collecting console messages and/or network requests from now on (observe only, nothing intercepted). */
+  observe?(kinds: readonly LogKind[]): Promise<void>;
+  /** The collected entries of the given kinds, oldest first; `clear` empties the buffer after reading. */
+  log?(
+    kinds: readonly LogKind[],
+    clear: boolean,
+  ): { entries: LogEntry[]; dropped: number; observing: LogKind[] };
+  /** The dialog waiting for an answer, if any. */
+  pendingDialog?(): PageDialog | null;
+  answerDialog?(accept: boolean, promptText?: string): Promise<void>;
+  /** Sets the page's device size (CSS width/height, pixel ratio, mobile layout, touch). */
+  setViewport?(viewport: Viewport): Promise<void>;
 }

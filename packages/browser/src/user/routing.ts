@@ -53,6 +53,7 @@ export async function routeTask(input: {
       reason: CONNECT_YOUR_BROWSER,
       backend: 'user',
       userBrowser: { reason: status.reason, detail: status.detail },
+      ...(status.setup ? { setup: status.setup } : {}),
       text: `This goal needs the person's own signed-in Chrome, which is not paired: ${status.detail} Connect your browser (the Marley Chrome extension, control on), then run it again.`,
       trace: [],
       artifacts: [],
