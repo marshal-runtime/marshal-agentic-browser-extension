@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { AppService, defaultPackageRoot, type AppServiceDeps } from './app/service.js';
 import { ChromeLauncher, findChrome, isHeaded, type LauncherOptions } from './chrome/launcher.js';
 import { ManagedTab } from './chrome/tab.js';
 import type {
@@ -34,6 +35,9 @@ export interface BrowserConfiguration extends LauncherOptions {
   readonly keepStepShots?: boolean;
   /** Attach a screenshot to decisions on the person's own Chrome (default false: text only). */
   readonly userVision?: boolean;
+  /** The app backend's helper binaries (default: dist/native, then the Swift build folders). */
+  readonly axHelperPath?: string;
+  readonly ocrHelperPath?: string;
 }
 
 const IDLE_MS = 10 * 60_000;
@@ -51,15 +55,25 @@ export class BrowserService {
   private readonly sessions = new Map<string, Session>();
   private readonly launcher: ChromeLauncher;
   private readonly sweeper: ReturnType<typeof setInterval>;
+  /** The `app` backend (native macOS apps): owns every `on: "app"` call and every app session id. */
+  private readonly apps: AppService;
 
   constructor(
     private readonly deciderFor: (context?: InvocationContext) => Decider,
     private readonly configuration: BrowserConfiguration = {},
     private readonly bridgeFor?: (context?: InvocationContext) => BridgeClient,
+    appDeps: Partial<AppServiceDeps> = {},
   ) {
     this.launcher = new ChromeLauncher(configuration);
+    this.apps = new AppService({
+      packageRoot: defaultPackageRoot(),
+      configuration,
+      save: (shot, folder, label) => this.save(shot, folder, label),
+      ...appDeps,
+    });
     this.sweeper = setInterval(() => {
       void this.sweep();
+      void this.apps.sweep();
     }, 60_000);
     this.sweeper.unref();
   }
@@ -80,6 +94,7 @@ export class BrowserService {
     this.sessions.clear();
     await Promise.all(all.map((session) => session.tab.close().catch(() => undefined)));
     await this.launcher.closeAll();
+    await this.apps.dispose();
   }
 
   async invoke(
@@ -94,6 +109,9 @@ export class BrowserService {
     const decider = this.deciderFor(context);
     const bridge = this.bridgeFor?.(context);
     try {
+      const forApp = args['on'] === 'app' || this.apps.owns(args['sessionId']);
+      if (forApp && name !== 'browser.status')
+        return { output: await this.invokeApp(name, args, decider) };
       switch (name) {
         case 'browser.status':
           return { output: await this.status(decider, bridge) };
@@ -120,6 +138,43 @@ export class BrowserService {
     }
   }
 
+  private async invokeApp(
+    name: string,
+    args: Record<string, unknown>,
+    decider: Decider,
+  ): Promise<Record<string, unknown>> {
+    switch (name) {
+      case 'browser.session.open':
+        return this.apps.open(args);
+      case 'browser.session.snapshot':
+        return this.apps.snapshot(args);
+      case 'browser.session.act':
+        return this.apps.act(args, parseAction(args['action']));
+      case 'browser.session.screenshot':
+        return this.apps.screenshot(args);
+      case 'browser.session.close':
+        return this.apps.close(args);
+      case 'browser.task': {
+        const goal = args['goal'];
+        if (typeof goal !== 'string' || goal.trim().length < 3)
+          throw new Error('BROWSER_BAD_INPUT: goal is required');
+        return this.apps.task(args, decider, goal.trim());
+      }
+      case 'browser.ask': {
+        const questions = args['questions'];
+        if (
+          typeof questions !== 'object' ||
+          questions === null ||
+          Object.keys(questions).length === 0
+        )
+          throw new Error('BROWSER_BAD_INPUT: questions is required');
+        return this.apps.ask(args, decider);
+      }
+      default:
+        throw new Error(`BROWSER_UNKNOWN_CAPABILITY: ${name}`);
+    }
+  }
+
   async status(decider: Decider, bridge?: BridgeClient): Promise<Record<string, unknown>> {
     const chrome = findChrome(this.configuration);
     const [decide, user] = await Promise.all([decider.probe(), userBrowserStatus(bridge)]);
@@ -135,18 +190,16 @@ export class BrowserService {
           profiles: PROFILES,
         },
         user,
-        {
-          name: 'app',
-          ready: false,
-          detail:
-            'native macOS apps are not part of this version yet (computer.automation.* still serves them)',
-        },
+        await this.apps.readiness(),
       ],
       decide,
-      openSessions: [...this.sessions.values()].map((session) => ({
-        sessionId: session.id,
-        profile: session.profile,
-      })),
+      openSessions: [
+        ...[...this.sessions.values()].map((session) => ({
+          sessionId: session.id,
+          profile: session.profile,
+        })),
+        ...this.apps.openSessions(),
+      ],
     };
   }
 
@@ -298,7 +351,7 @@ export class BrowserService {
         ok: false,
         status: 'blocked',
         reason: 'backend_unavailable',
-        error: `backend "${on}" is not part of this version; use "managed" or "user"`,
+        error: `backend "${on}" is not part of this version; use "managed", "user" or "app"`,
       };
     }
     const existing = typeof args['sessionId'] === 'string' ? this.session(args, bridge) : null;

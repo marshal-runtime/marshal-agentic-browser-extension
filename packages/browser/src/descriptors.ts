@@ -7,13 +7,30 @@ const PROFILE = {
     'agent: lasting profile (logins persist); visitor: fresh, no cookies, observes only; offline: no network (pages we render). Default visitor.',
 } as const;
 const ON_USER = {
-  enum: ['managed', 'user'],
+  enum: ['managed', 'user', 'app'],
   description:
-    "user: a background tab in the person's own signed-in Chrome (through the browser bridge; needs url). Default managed.",
+    "user: a background tab in the person's own signed-in Chrome (through the browser bridge; needs url). app: a native macOS app (needs app). Default managed.",
 } as const;
 const SESSION_ID = {
   type: 'string',
   description: 'From browser.session.open (or a task run with keepOpen).',
+} as const;
+/** The app backend's inputs (native macOS apps through Accessibility), shared by task, session.open and ask. */
+const APP_INPUTS = {
+  app: {
+    type: 'string',
+    description:
+      'With on:"app": the app, by bundle id (com.apple.TextEdit) or name (TextEdit). Started in the background when not running, and quit afterwards.',
+  },
+  allowRealInput: {
+    type: 'boolean',
+    description:
+      'With on:"app": may a step bring the app to the front or use real keyboard/mouse input when Accessibility alone cannot do it? Default false: such a step stops with needs_input (real_input_required).',
+  },
+  launch: {
+    type: 'boolean',
+    description: 'With on:"app": start the app when it is not running (default true).',
+  },
 } as const;
 const QUESTION = {
   type: 'object',
@@ -60,7 +77,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.1.0',
     title: 'Which browsers are available',
     description:
-      "Lists the browser backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome through the browser bridge, with why it is not paired: extension_missing, no_socket, control_off, not_connected, denied) and whether marshal.models.decide is offered.",
+      "Lists the backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome through the browser bridge, with why it is not paired: extension_missing, no_socket, control_off, not_connected, denied; native macOS apps with their Accessibility and Screen Recording permission, each with the reason and System Settings link when missing, the screen lock and the running apps) and whether marshal.models.decide is offered.",
     inputSchema: object({}),
     outputSchema: object({
       ...OK_ERROR,
@@ -75,12 +92,16 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.1.0',
     title: 'Open a browser session',
     description:
-      'Opens a tab in a Chrome this extension starts, optionally at a URL. Returns a sessionId for snapshot / act / screenshot / close. Idle sessions close after 10 minutes.',
-    inputSchema: object({ on: ON_USER, profile: PROFILE, url: { type: 'string' } }),
+      'Opens a tab in a Chrome this extension starts (or, on:"user", in the person\'s own Chrome), optionally at a URL, or (on:"app") a native macOS app. Returns a sessionId for snapshot / act / screenshot / close. Idle sessions close after 10 minutes.',
+    inputSchema: object({ on: ON_USER, profile: PROFILE, url: { type: 'string' }, ...APP_INPUTS }),
     outputSchema: object({
       ...OK_ERROR,
       sessionId: { type: 'string' },
       profile: { type: 'string' },
+      backend: { type: 'string' },
+      app: { type: 'string' },
+      launched: { type: 'boolean' },
+      reason: { type: 'string' },
       url: { type: 'string' },
       title: { type: 'string' },
     }),
@@ -135,7 +156,13 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       },
       ['sessionId', 'action'],
     ),
-    outputSchema: object({ ...OK_ERROR, url: { type: 'string' }, title: { type: 'string' } }),
+    outputSchema: object({
+      ...OK_ERROR,
+      url: { type: 'string' },
+      title: { type: 'string' },
+      needsRealInput: { type: 'boolean' },
+      realInput: { type: 'boolean' },
+    }),
     permissions: permission(
       'browser.session.act',
       'Clicks, types and navigates in a Chrome the browser extension starts.',
@@ -162,7 +189,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     title: 'Close a session',
     description: 'Closes the tab (and, for visitor and offline, its cookies and storage).',
     inputSchema: object({ sessionId: SESSION_ID }, ['sessionId']),
-    outputSchema: object({ ...OK_ERROR, closed: { type: 'boolean' } }),
+    outputSchema: object({ ...OK_ERROR, closed: { type: 'boolean' }, quit: { type: 'boolean' } }),
   },
   {
     protocolVersion: '1.0.0',
@@ -176,15 +203,16 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
         goal: { type: 'string' },
         startUrl: { type: 'string' },
         on: {
-          enum: ['auto', 'managed', 'user'],
+          enum: ['auto', 'managed', 'user', 'app'],
           description:
-            "auto (default): the managed Chrome, unless the goal needs the person's own login; then their own Chrome, or needs_owner 'connect your browser' when it is not paired (never another browser). user: the person's own Chrome (needs startUrl).",
+            "auto (default): the managed Chrome, unless the goal needs the person's own login; then their own Chrome, or needs_owner 'connect your browser' when it is not paired (never another browser). user: the person's own Chrome (needs startUrl). app: a native macOS app (needs app).",
         },
         needsLogin: {
           type: 'boolean',
           description:
             "For on:auto: whether the goal needs the person's own signed-in session. When absent, one decision call judges it.",
         },
+        ...APP_INPUTS,
         profile: PROFILE,
         sessionId: SESSION_ID,
         keepOpen: {
@@ -224,6 +252,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       backend: { type: 'string' },
       userBrowser: { type: 'object' },
       profile: { type: 'string' },
+      app: { type: 'string' },
       sessionId: { type: 'string' },
       status: {
         enum: [
@@ -266,6 +295,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
         sessionId: SESSION_ID,
         on: ON_USER,
         profile: PROFILE,
+        ...APP_INPUTS,
         questions: {
           type: 'object',
           additionalProperties: QUESTION,
@@ -277,6 +307,8 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     outputSchema: object({
       ...OK_ERROR,
       status: { type: 'string' },
+      reason: { type: 'string' },
+      backend: { type: 'string' },
       url: { type: 'string' },
       title: { type: 'string' },
       answers: { type: 'object' },

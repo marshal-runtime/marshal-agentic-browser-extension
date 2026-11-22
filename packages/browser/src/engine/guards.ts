@@ -65,6 +65,18 @@ function commonSuffix(a: string, b: string): number {
   return shared;
 }
 
+/**
+ * The backend's typed owner signal for a click or submit (an app's window control, a sheet's default button). It is
+ * a field the backend read from the platform (Accessibility role/subrole/default button), never a word list.
+ */
+export function signalNeedsOwner(element: SnapshotElement, kind: string): boolean {
+  return (
+    (kind === 'click' || kind === 'submit') &&
+    typeof element.ownerSignal === 'string' &&
+    element.ownerSignal !== ''
+  );
+}
+
 /** True when clicking this element must be left to the owner (see the header). */
 export function linkNeedsOwner(
   element: SnapshotElement,
