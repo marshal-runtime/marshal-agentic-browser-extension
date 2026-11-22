@@ -262,6 +262,43 @@ describe('task registry', () => {
     expect(await registry.cancel('nope')).toEqual({ found: false });
   });
 
+  it('a cancel while routing (the login check asks the model) ends the task at once, opening nothing', async () => {
+    const decider = new HeldDecider(); // the needs-login question never answers
+    const service = new BrowserService(() => decider, { chromePath: '/nonexistent/chrome' });
+    try {
+      const started = (
+        await service.invoke('browser.task', {
+          goal: 'read the news',
+          startUrl: START,
+          wait: false,
+        })
+      ).output as Record<string, string>;
+      await decider.started;
+      const taskId = started['taskId'];
+      expect((await service.invoke('browser.task.get', { taskId })).output).toMatchObject({
+        state: 'running',
+        phase: 'routing',
+      });
+      const began = Date.now();
+      const { output } = await service.invoke('browser.task.cancel', { taskId });
+      expect(Date.now() - began).toBeLessThan(2_000);
+      expect(output).toMatchObject({
+        ok: true,
+        cancelled: true,
+        status: 'cancelled',
+        result: { status: 'cancelled', reason: 'cancelled_by_caller' },
+      });
+      decider.release(); // a late answer changes nothing
+      await Promise.resolve();
+      const status = (await service.invoke('browser.status', {})).output as {
+        openSessions: unknown[];
+      };
+      expect(status.openSessions).toEqual([]);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it('a failing task ends as finished with its error', async () => {
     const registry = new TaskRegistry();
     const entry = registry.start('a goal', () => Promise.reject(new Error('boom')));

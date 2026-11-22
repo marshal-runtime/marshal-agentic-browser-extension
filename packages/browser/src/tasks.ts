@@ -16,7 +16,7 @@ export interface TaskEntry {
   readonly startedAt: number;
   readonly controller: AbortController;
   state: TaskState;
-  phase: TaskPhase | 'starting' | 'closing';
+  phase: TaskPhase | 'starting' | 'routing' | 'closing';
   /** The tab the task drives, once it is open (the watch panel screencasts it). */
   target: Target | null;
   /** The session id when the task runs in, or keeps, a session. */
@@ -166,4 +166,31 @@ export function describeTask(entry: TaskEntry, now: number = Date.now()): Record
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(entry.lastStep ? { lastStep: entry.lastStep } : {}),
   };
+}
+
+/** What {@link untilAborted} returns when the signal fired first. */
+export const ABORTED: unique symbol = Symbol('aborted');
+
+/** Resolves with the work, or with ABORTED as soon as the signal fires (the work is abandoned, its error ignored). */
+export async function untilAborted<T>(
+  signal: AbortSignal,
+  work: Promise<T>,
+): Promise<T | typeof ABORTED> {
+  if (signal.aborted) {
+    work.catch(() => undefined);
+    return ABORTED;
+  }
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    onAbort = () => {
+      resolve(ABORTED);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  work.catch(() => undefined);
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }

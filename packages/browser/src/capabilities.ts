@@ -23,7 +23,7 @@ import { runTask, type EngineSettings, type TaskInput } from './engine/task.js';
 import { DESCRIPTORS } from './descriptors.js';
 import { defaultArtifactRoot, Lifecycle } from './lifecycle.js';
 import { RecorderUnavailable, type Recording, type VideoResult } from './record/recorder.js';
-import type { TaskEntry } from './tasks.js';
+import { ABORTED, untilAborted, type TaskEntry } from './tasks.js';
 import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from './target.js';
 import type { BridgeClient } from './user/bridge.js';
 import { goalNeedsLogin, routeTask } from './user/routing.js';
@@ -413,6 +413,14 @@ export class BrowserService {
     const signal = task.controller.signal;
     const keepOpen = args['keepOpen'] === true;
     const goal = String(args['goal']).trim();
+    const cancelled = {
+      ok: true,
+      taskId,
+      status: 'cancelled',
+      reason: 'cancelled_by_caller',
+      trace: [],
+      artifacts: [],
+    };
     const startUrl = typeof args['startUrl'] === 'string' ? args['startUrl'] : undefined;
     let backend: 'managed' | 'user' = existing
       ? existing.tab.backend
@@ -422,15 +430,20 @@ export class BrowserService {
     if (!existing && on !== 'managed') {
       // A goal that needs the person's login never runs in another browser (src/user/routing.ts).
       let route;
+      task.phase = 'routing';
       try {
-        route = await routeTask({
-          on,
-          needsLogin: () =>
-            typeof args['needsLogin'] === 'boolean'
-              ? Promise.resolve(args['needsLogin'])
-              : goalNeedsLogin(decider, goal, startUrl),
-          status: () => userBrowserStatus(bridge),
-        });
+        // The login check asks the model: a cancel must not wait for its answer.
+        route = await untilAborted(
+          signal,
+          routeTask({
+            on,
+            needsLogin: () =>
+              typeof args['needsLogin'] === 'boolean'
+                ? Promise.resolve(args['needsLogin'])
+                : goalNeedsLogin(decider, goal, startUrl),
+            status: () => userBrowserStatus(bridge),
+          }),
+        );
       } catch (error) {
         if (error instanceof DecideError)
           return {
@@ -443,6 +456,7 @@ export class BrowserService {
           };
         throw error;
       }
+      if (route === ABORTED) return cancelled;
       if ('stop' in route) return { taskId, ...route.stop };
       backend = route.backend;
     }
@@ -465,22 +479,15 @@ export class BrowserService {
       ...(this.configuration.wallMs ? { wallMs: this.configuration.wallMs } : {}),
     };
     try {
-      if (signal.aborted)
-        return {
-          ok: true,
-          taskId,
-          status: 'cancelled',
-          reason: 'cancelled_by_caller',
-          trace: [],
-          artifacts: [],
-        };
+      if (signal.aborted) return cancelled;
       session ??=
         backend === 'user'
           ? await this.openUserTab(bridge, startUrl)
           : await this.openTab(profileOf(args['profile'], 'visitor'));
       task.target = session.tab;
       if (existing || keepOpen) task.sessionId = session.id;
-      if (want?.video && !signal.aborted) {
+      // Read again: a cancel can land while the tab opens.
+      if (want?.video && !task.controller.signal.aborted) {
         try {
           recording = await this.lifecycle.startTaskVideo(session.tab, taskId);
         } catch (error) {

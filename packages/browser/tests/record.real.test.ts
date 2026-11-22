@@ -178,6 +178,7 @@ describe.skipIf(!chrome.path)('screencast, recording and cancel (real Chrome)', 
         await service.invoke('browser.task', {
           goal: 'keep scrolling',
           startUrl: `${base}/`,
+          on: 'managed',
           wait: false,
           bounds: { steps: 50 },
         })

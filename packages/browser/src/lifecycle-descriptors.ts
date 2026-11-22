@@ -27,7 +27,7 @@ const TASK_SUMMARY = {
   phase: {
     type: 'string',
     description:
-      'navigating | reading | deciding | acting | waiting | extracting | closing | finished',
+      'starting | routing | navigating | reading | deciding | acting | waiting | extracting | closing | finished',
   },
   steps: { type: 'number' },
   elapsedMs: { type: 'number' },
