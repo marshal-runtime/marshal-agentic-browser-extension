@@ -234,13 +234,15 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 `keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath`,
 `bridgePort`, `chromeExtensionDir` (see `runtime-extension.json`).
 Without `chromePath`, Chrome comes from `MARSHAL_BROWSER_CHROME`, then `MARSHAL_SDK_CHROME` (the Chrome a marshal-sdk host
-found), then the usual install paths.
+found), then the usual install paths. On Linux, Chrome gets `--disable-dev-shm-usage` (containers give /dev/shm 64 MB),
+and `--no-sandbox` only when the process runs as root (Chrome refuses to start as root otherwise).
 
 ## Build and test
 
 ```bash
 npm install
 npm run build      # tsc --noEmit + esbuild -> dist/runtime.cjs; on macOS also swift build + stage both helpers
+                   # (run it first: the bundle, dist/chrome-extension and org-archive tests check the build output)
 npx vitest run     # engine (fake decide), app backend (fake helper process), units, manifest/bundle allow-list,
                    # real Chrome (skipped without Chrome), lifecycle/screencast/watch/recorder units, and a real
                    # Chrome + ffmpeg recording checked with ffprobe (skipped without ffmpeg)
@@ -251,4 +253,9 @@ node scripts/mutate-session-guards.mjs   # the same for the session operations, 
 # (MB_CHROME_FOR_TESTING, else Playwright's cached Chrome for Testing; skipped without one; never the person's Chrome)
 # the same through a clean marshal-sdk host with only this package (stage it without links first):
 node scripts/prove-user-carried.mjs --sdk <marshal-sdk dist/src/index.js> --package <copy> --out <dir> [--port-in-use 17373]
+npm run pack:org -- --out <dir>   # the org catalog archive: browser-<version>.tgz (helpers 0755, no links), .sha256, index.json
 ```
+
+Marshal's own extension packer writes every file 0644 and would strip `+x` from `dist/native/*`, so the org catalog
+takes the archive `pack:org` builds (tests/pack-org.test.ts extracts it and runs the helpers). One archive per version:
+bump `version` in both `package.json` and `runtime-extension.json` (the script refuses a mismatch).

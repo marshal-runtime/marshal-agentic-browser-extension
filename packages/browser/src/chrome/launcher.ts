@@ -36,6 +36,8 @@ export interface LauncherOptions {
   readonly headed?: boolean;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly platform?: NodeJS.Platform;
+  /** The process's user id (tests); default `process.getuid()`. */
+  readonly uid?: number;
 }
 
 export const DEAD_PROXY = 'http://127.0.0.1:9';
@@ -52,6 +54,7 @@ export function chromeArgs(
   userDataDir: string,
   headed: boolean,
   platform: NodeJS.Platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
 ): string[] {
   return [
     '--remote-debugging-pipe',
@@ -70,6 +73,11 @@ export function chromeArgs(
       ? ['--disable-component-update', '--disable-background-networking']
       : []),
     '--window-size=1280,800',
+    // Linux containers (Page Studio's Coder builds) give /dev/shm 64 MB, and Chrome died mid-capture there; and Chrome
+    // refuses to start as root without --no-sandbox. Same rule as Page Studio's old launcher (main 833836a,
+    // src/extension/browser.ts:27-29): Linux only, and --no-sandbox only for root.
+    ...(platform === 'linux' ? ['--disable-dev-shm-usage'] : []),
+    ...(platform === 'linux' && uid === 0 ? ['--no-sandbox'] : []),
     // --disable-gpu-compositing: a GPU-composited capture taller than 16,384 device px (Chrome's largest texture) repeats
     // the top of the page past that row. Software compositing keeps hardware WebGL, which --disable-gpu would remove.
     ...(headed
@@ -326,7 +334,13 @@ export class ChromeLauncher {
       await writeEphemeralPreferences(userDataDir);
     }
     installExitHook();
-    const args = chromeArgs(kind, userDataDir, headed, this.options.platform);
+    const args = chromeArgs(
+      kind,
+      userDataDir,
+      headed,
+      this.options.platform,
+      this.options.uid ?? process.getuid?.(),
+    );
     const child = spawn(found.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
     LIVE_CHILDREN.add(child);
     let stderr = '';

@@ -308,6 +308,20 @@ describe('H3 / L2 / L1: the Chrome command line and the agent folder', () => {
     );
   });
 
+  it('Linux: --disable-dev-shm-usage always, --no-sandbox only as root; neither on macOS', () => {
+    for (const kind of ['lasting', 'ephemeral'] as const) {
+      const linuxUser = chromeArgs(kind, '/tmp/x', false, 'linux', 1000);
+      expect(has(linuxUser, '--disable-dev-shm-usage'), kind).toBe(true);
+      expect(has(linuxUser, '--no-sandbox'), kind).toBe(false);
+      const linuxRoot = chromeArgs(kind, '/tmp/x', true, 'linux', 0);
+      expect(has(linuxRoot, '--disable-dev-shm-usage'), kind).toBe(true);
+      expect(has(linuxRoot, '--no-sandbox'), kind).toBe(true);
+      const macRoot = chromeArgs(kind, '/tmp/x', false, 'darwin', 0);
+      expect(has(macRoot, '--disable-dev-shm-usage'), kind).toBe(false);
+      expect(has(macRoot, '--no-sandbox'), kind).toBe(false);
+    }
+  });
+
   it('prepareAgentDir creates the profile folder 0700 and makes an existing one 0700', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'mb-l1-'));
     try {

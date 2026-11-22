@@ -1,11 +1,11 @@
 /**
  * Live picture of a `user` tab for a viewer (the side panel). Two transports, picked at start:
  *   - events: a bridge that forwards chrome.debugger's `Page.screencastFrame` (marley-browser-extension's event-forwarding
- *     change) offers `browserbridge.screencast.start/next/stop`; frames are pulled with a long poll on `next`, so the
- *     host's request/response `execute` is enough and no second socket is opened;
- *   - polling: any older bridge. One screenshot every POLL_MS x everyNthFrame, scaled and re-encoded as JPEG here.
- * A bridge without the event verbs answers `start` with not_found (extension_missing); that, and only that, selects
- * polling. Any other failure is the caller's error.
+ *     change, #4) offers `browserbridge.screencast.start/next/stop`; frames are pulled with a long poll on `next`;
+ *   - polling: any other bridge, including the carried one at the main pin. One screenshot every POLL_MS x
+ *     everyNthFrame, scaled and re-encoded as JPEG here.
+ * A bridge without the event verbs answers `start` with `unsupported`; that, and only that, selects polling. Any other
+ * failure is the caller's error.
  */
 import type {
   ScreencastFrameMeta,

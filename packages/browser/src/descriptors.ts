@@ -91,7 +91,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
     version: '0.1.0',
     title: 'Which browsers are available',
     description:
-      "Lists the backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome through the browser bridge, with why it is not paired: extension_missing, no_socket, control_off, not_connected, denied; native macOS apps with their Accessibility and Screen Recording permission, each with the reason and System Settings link when missing, the screen lock and the running apps) and whether marshal.models.decide is offered. When the person's Chrome is not paired, its entry carries setup: what to install or switch on, step by step (a developer install of the Marley Chrome extension; the Marley website's download does not connect Marshal).",
+      "Lists the backends this extension can drive right now (managed Chrome with agent / visitor / offline profiles; the person's own Chrome through the bridge this package carries, with why it is not paired: port_in_use, no_socket, control_off, not_connected, error; native macOS apps with their Accessibility and Screen Recording permission, each with the reason and System Settings link when missing, the screen lock and the running apps) and whether marshal.models.decide is offered. When the person's Chrome is not paired, its entry carries setup: what to install or switch on, step by step (Load unpacked of the Marley Chrome extension folder this package carries, at an absolute path; the Marley website's or a store copy does not connect Marshal).",
     inputSchema: object({}),
     outputSchema: object({
       ...OK_ERROR,

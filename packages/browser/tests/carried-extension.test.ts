@@ -37,6 +37,16 @@ const lock = JSON.parse(
 };
 const PINNED = '48cf63fb02b6533750bd114a7ae381cff2ce839b';
 
+/** A test of build output fails with this reason, not a confusing one, on a checkout that was not built. */
+function built(folder: string): string {
+  const full = path.join(root, folder);
+  if (!existsSync(full))
+    throw new Error(
+      `${folder} is missing: run \`npm run build\` first (this test checks the build output)`,
+    );
+  return full;
+}
+
 function noLinks(dir: string): string[] {
   const links: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -61,7 +71,7 @@ describe('carried Chrome extension', () => {
 
   for (const folder of ['vendor/chrome-extension', 'dist/chrome-extension'])
     it(`${folder} is byte-for-byte the locked tree, with no links`, () => {
-      const dir = path.join(root, folder);
+      const dir = folder.startsWith('dist') ? built(folder) : path.join(root, folder);
       expect(noLinks(dir)).toEqual([]);
       const actual = hashTree(dir) as { files: Record<string, string>; treeSha256: string };
       expect(actual.files).toEqual(lock.files);
@@ -72,9 +82,9 @@ describe('carried Chrome extension', () => {
     });
 
   it('dist carries the lock beside the folder (setup reads its version and commit)', () => {
-    expect(
-      JSON.parse(readFileSync(path.join(root, 'dist', 'chrome-extension.lock.json'), 'utf8')),
-    ).toEqual(lock);
+    expect(JSON.parse(readFileSync(built('dist/chrome-extension.lock.json'), 'utf8'))).toEqual(
+      lock,
+    );
   });
 
   it('runs no model: no provider endpoint or key in any carried file', () => {
@@ -121,8 +131,9 @@ describe('carried Chrome extension', () => {
 });
 
 describe('stable folder for Load unpacked (outlives updates of this package)', () => {
+  // The vendored folder (lock beside it), so these run without a build; the same files ship as dist/chrome-extension.
   const source = {
-    folder: path.join(root, 'dist', 'chrome-extension'),
+    folder: path.join(root, 'vendor', 'chrome-extension'),
     version: lock.version,
     commit: lock.commit,
   };

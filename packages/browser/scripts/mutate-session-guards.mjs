@@ -318,6 +318,38 @@ MUTATIONS.push(
   },
 );
 
+MUTATIONS.push(
+  {
+    name: 'linux: no --disable-dev-shm-usage',
+    file: 'src/chrome/launcher.ts',
+    from: "...(platform === 'linux' ? ['--disable-dev-shm-usage'] : []),",
+    to: '',
+    tests: ['tests/hardening.test.ts'],
+  },
+  {
+    name: 'linux: --no-sandbox for every user',
+    file: 'src/chrome/launcher.ts',
+    from: "...(platform === 'linux' && uid === 0 ? ['--no-sandbox'] : []),",
+    to: "...(platform === 'linux' ? ['--no-sandbox'] : []),",
+    tests: ['tests/hardening.test.ts'],
+  },
+  {
+    name: 'no-sandbox on macOS as root',
+    file: 'src/chrome/launcher.ts',
+    from: "...(platform === 'linux' && uid === 0 ? ['--no-sandbox'] : []),",
+    to: "...(uid === 0 ? ['--no-sandbox'] : []),",
+    tests: ['tests/hardening.test.ts'],
+  },
+);
+
+MUTATIONS.push({
+  name: 'org archive: helpers written 0644',
+  file: 'scripts/pack-org.mjs',
+  from: 'chmodSync(full, entry.dir || HELPERS.includes(entry.rel) ? 0o755 : 0o644);',
+  to: 'chmodSync(full, entry.dir ? 0o755 : 0o644);',
+  tests: ['tests/pack-org.test.ts'],
+});
+
 const only = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : undefined;
