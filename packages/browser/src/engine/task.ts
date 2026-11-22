@@ -106,7 +106,9 @@ export interface EngineSettings {
 }
 
 export const DEFAULT_SETTINGS: EngineSettings = {
-  minConfidence: 0.4,
+  // 0.4 stopped python.org search 3/3 on a split between two right actions (submit e10 0.15 / click Go 0.21); 0.15
+  // passed it 3/3 with no change on 15 other runs (bench/, 2026-11-22). The confidence spreads over 30-40 offers.
+  minConfidence: 0.15,
   goalMetThreshold: 0.75,
   needsOwnerThreshold: 0.75,
   pageReadyThreshold: 0.35,

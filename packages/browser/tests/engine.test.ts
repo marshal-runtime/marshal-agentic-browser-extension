@@ -87,7 +87,7 @@ describe('stop reasons', () => {
     for (const stop of ['need_value', 'blocked']) {
       const target = new FakeTarget([page(URL, [el('e1')])]);
       const decider = new FakeDecider([
-        { choice: stop, confidence: 0.35 },
+        { choice: stop, confidence: 0.1 },
         { choice: 'click e1', confidence: 0.9 },
         { choice: 'done', goalMet: 0.9 },
       ]);
@@ -169,20 +169,20 @@ describe('stop reasons', () => {
     const decider = new FakeDecider([
       {
         choice: 'click e2',
-        confidence: 0.25,
-        probabilities: { 'click e2': 0.25, 'click e1': 0.22 },
+        confidence: 0.1,
+        probabilities: { 'click e2': 0.1, 'click e1': 0.09 },
       },
       {
         choice: 'click e1',
-        confidence: 0.3,
-        probabilities: { 'click e1': 0.3, 'click e2': 0.28, done: 0.1 },
+        confidence: 0.12,
+        probabilities: { 'click e1': 0.12, 'click e2': 0.11, done: 0.05 },
       },
     ]);
     const result = await run(target, decider, { goal: 'pick one' });
     expect(result.status).toBe('low_confidence');
     expect(target.snapshots).toBe(2);
     expect(decider.judged).toHaveLength(2);
-    expect(result.candidates?.[0]).toMatchObject({ action: 'click e1', probability: 0.3 });
+    expect(result.candidates?.[0]).toMatchObject({ action: 'click e1', probability: 0.12 });
     expect(result.candidates?.[1]?.description).toContain('Button e2');
     expect(result.artifacts[0]?.label).toBe('final');
     expect(target.actions).toEqual([]);
@@ -191,8 +191,8 @@ describe('stop reasons', () => {
   it('acts when the low-confidence retry picks the same page action, but never takes a low-confidence stop that way', async () => {
     const target = new FakeTarget([page(URL, [el('e1'), el('e2')]), page(`${URL}?2`, [el('e1')])]);
     const decider = new FakeDecider([
-      { choice: 'click e1', confidence: 0.22 },
-      { choice: 'click e1', confidence: 0.2 },
+      { choice: 'click e1', confidence: 0.12 },
+      { choice: 'click e1', confidence: 0.1 },
       { choice: 'done', goalMet: 0.9 },
     ]);
     const result = await run(target, decider, { goal: 'pick one' });
@@ -202,17 +202,29 @@ describe('stop reasons', () => {
     for (const stop of ['need_value', 'blocked']) {
       const stopped = await run(
         new FakeTarget([page(URL, [el('e1')])]),
-        new FakeDecider([{ choice: stop, confidence: 0.3 }]),
+        new FakeDecider([{ choice: stop, confidence: 0.1 }]),
         { goal: 'x y z' },
       );
       expect(stopped.status, stop).toBe('low_confidence');
     }
   });
 
+  it('acts on a split pick at 0.2 without re-deciding (eval 2026-11-22: python.org split submit/Go at 0.15-0.21)', async () => {
+    const target = new FakeTarget([page(URL, [el('e1'), el('e2')]), page(`${URL}?2`, [el('e1')])]);
+    const decider = new FakeDecider([
+      { choice: 'click e1', confidence: 0.2, probabilities: { 'click e1': 0.2, 'click e2': 0.19 } },
+      { choice: 'done', goalMet: 0.9 },
+    ]);
+    const result = await run(target, decider, { goal: 'pick one' });
+    expect(result.status).toBe('done');
+    expect(decider.judged).toHaveLength(2);
+    expect(target.actions).toEqual([{ kind: 'click', ref: 'e1' }]);
+  });
+
   it('acts when the retry is confident', async () => {
     const target = new FakeTarget([page(URL, [el('e1')])]);
     const decider = new FakeDecider([
-      { choice: 'click e1', confidence: 0.2 },
+      { choice: 'click e1', confidence: 0.1 },
       { choice: 'click e1', confidence: 0.9 },
       { choice: 'done', goalMet: 0.9 },
     ]);

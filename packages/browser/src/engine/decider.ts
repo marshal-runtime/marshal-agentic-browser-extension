@@ -15,18 +15,23 @@ import {
   type RuntimeExecuteFn,
 } from '../contracts.js';
 
-/** A failed decide call. `unavailable` codes stop a task with `decisions_unavailable`. */
+/**
+ * A failed decide call. `unavailable` codes stop a task with `decisions_unavailable`. So does any failure of the host
+ * to run the capability at all (`hostFailure`: a non-success runtime status or a rejected call), whatever its code:
+ * those say nothing about the page, so they must not read as the page being `blocked`.
+ */
 export class DecideError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly hostFailure = false,
   ) {
     super(`${code}: ${message}`);
     this.name = 'DecideError';
   }
 
   get unavailable(): boolean {
-    return UNAVAILABLE.has(this.code);
+    return this.hostFailure || UNAVAILABLE.has(this.code);
   }
 }
 
@@ -58,7 +63,13 @@ export function createHostDecider(execute: RuntimeExecuteFn, context?: Invocatio
         input,
       },
       context,
-    );
+    ).catch((error: unknown) => {
+      throw new DecideError(
+        'HOST_ERROR',
+        error instanceof Error ? error.message : String(error),
+        true,
+      );
+    });
     if (response.status === 'not_found') {
       throw new DecideError('NOT_FOUND', `${DECIDE_CAPABILITY} is not offered by this host`);
     }
@@ -72,6 +83,7 @@ export function createHostDecider(execute: RuntimeExecuteFn, context?: Invocatio
       throw new DecideError(
         response.error?.code ?? 'JEV_UNAVAILABLE',
         response.error?.message ?? 'decide failed',
+        true,
       );
     }
     const output = response.result?.output as Record<string, unknown> | undefined;
