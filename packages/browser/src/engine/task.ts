@@ -10,6 +10,7 @@
 import { DecideError, type Decider } from './decider.js';
 import { actionGuard, leftHome, privateHost, siteOf } from './guards.js';
 import { actionOf, buildOffers, clip, maskValues, unmaskValues, type Offer } from './offers.js';
+import { SAY, sayOffer } from './say.js';
 import { PLAN_MAX, planQuestions, readPlan, relocate, structureOf } from './plan.js';
 import { extractRequest, speculate, type Speculation } from './speculate.js';
 import { triageStartPage } from './triage.js';
@@ -90,6 +91,8 @@ export interface TraceStep {
   readonly shotMs?: number;
   /** A planned action: taken from step `by`'s decision (src/engine/plan.ts), without a decision of its own. */
   readonly planned?: { readonly by: number; readonly index: number };
+  /** The step in plain words for the person watching (src/engine/say.ts), e.g. `Clicking "Travel"`. */
+  readonly say?: string;
 }
 
 export interface Artifact {
@@ -185,7 +188,7 @@ export interface EngineDeps {
   /** Each trace step as it is recorded (the watch panel shows the latest). */
   readonly onTrace?: (step: TraceStep) => void;
   /** What the engine is doing now, for a live view. */
-  readonly onPhase?: (phase: TaskPhase) => void;
+  readonly onPhase?: (phase: TaskPhase, say?: string) => void;
 }
 
 export type TaskPhase = 'navigating' | 'reading' | 'deciding' | 'acting' | 'waiting' | 'extracting';
@@ -265,9 +268,9 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
     deps.onPhase?.('waiting');
     return guard(() => rawSleep(ms));
   };
-  const phase = (value: TaskPhase): void => {
+  const phase = (value: TaskPhase, say?: string): void => {
     if (signal?.aborted) throw new Cancelled();
-    deps.onPhase?.(value);
+    deps.onPhase?.(value, say);
   };
   const values = input.values ?? {};
   const vision = input.vision ?? true;
@@ -356,6 +359,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
     pushTrace({
       step: acted + 1,
       action: 'guard',
+      say: SAY.guard,
       rung: 0,
       ms: 0,
       url: snapshot?.url ?? '',
@@ -396,6 +400,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       pushTrace({
         step: 0,
         action: `navigate ${clip(input.startUrl, 120)}`,
+        say: SAY.open(input.startUrl),
         rung: 0,
         ms,
         url: input.startUrl,
@@ -463,7 +468,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       }
       if (expired()) return { stop: await finish('budget', 'time_limit') };
       // The last point a cancel stops the task before it acts; a dispatched action runs to its end.
-      phase('acting');
+      phase('acting', sayOffer(offer));
       const { value: outcome, ms: actMs } = await timed(() => deps.target.act(action));
       if (signal?.aborted) {
         acted += 1;
@@ -643,6 +648,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         pushTrace({
           step: acted + 1,
           action: 'decide',
+          say: SAY.decide,
           rung: 1,
           ms: now() - began,
           url: decided.url,
@@ -668,6 +674,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         pushTrace({
           step: acted + 1,
           action: 'decide',
+          say: SAY.decide,
           rung: 1,
           ms,
           url: decided.url,
@@ -692,6 +699,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         pushTrace({
           step: stepNo,
           action: choice.choice,
+          say: offer ? sayOffer(offer) : SAY.decide,
           rung: 1,
           ms,
           ...(actMs === undefined ? {} : { actMs }),
@@ -853,6 +861,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
           pushTrace({
             step: plannedNo,
             action: planned.action,
+            say: sayOffer(planned),
             rung: 1,
             ms: 0,
             ...(actMs === undefined ? {} : { actMs }),
@@ -880,6 +889,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
         pushTrace({
           step: acted + 1,
           action: 'plan',
+          say: SAY.plan,
           rung: 0,
           ms: 0,
           url: snapshot.url,
@@ -912,6 +922,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       pushTrace({
         step: acted + 1,
         action: 'read values',
+        say: SAY.readValues,
         rung: 0,
         ms: 0,
         url: snapshot?.url ?? '',
@@ -955,6 +966,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       pushTrace({
         step: acted + 1,
         action: 'extract',
+        say: SAY.extract,
         rung: 2,
         ms: now() - began,
         url: snapshot?.url ?? '',
@@ -966,6 +978,7 @@ export async function runTask(deps: EngineDeps, input: TaskInput): Promise<TaskR
       pushTrace({
         step: acted + 1,
         action: 'extract',
+        say: SAY.extract,
         rung: 2,
         ms: now() - began,
         url: snapshot?.url ?? '',

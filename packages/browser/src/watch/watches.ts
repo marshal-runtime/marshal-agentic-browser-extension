@@ -14,7 +14,9 @@
  * Chrome or an app; rate-limited; text and editing keys never reach a focused password, code or card field.
  */
 import { randomUUID } from 'node:crypto';
-import { describeTask, type TaskEntry } from '../tasks.js';
+import { open } from 'node:fs/promises';
+import { jpegSize } from '../chrome/screencast.js';
+import { describeTask, KEPT_FRAME_MAX_BYTES, type TaskEntry } from '../tasks.js';
 import {
   MODIFIERS,
   PRESS_KEYS,
@@ -48,6 +50,9 @@ interface Frame {
   readonly bytes: number;
   readonly pageWidth?: number;
   readonly pageHeight?: number;
+  readonly mimeType?: 'image/jpeg' | 'image/png';
+  /** The task's last picture, shown when this watch saw no live frame of a finished task (opened after it ended). */
+  readonly final?: boolean;
 }
 
 interface Stream {
@@ -75,6 +80,8 @@ interface Watch {
   inputs: number[];
   /** Inputs run one after another, in the order the panel sent them. */
   chain: Promise<unknown>;
+  /** The final screenshot was looked for once (a finished task's watch without a live frame). */
+  finalTried: boolean;
 }
 
 /** Without a poll for this long, the screencast stops (the panel was closed or hidden). */
@@ -86,6 +93,8 @@ const LOCATION_MS = 1_000;
 export const INPUT_RATE = 20;
 export const TEXT_MAX = 64;
 const WHEEL_MAX = 3_000;
+/** A final screenshot larger than this is not sent to the panel. */
+const FINAL_MAX_BYTES = 4_000_000;
 
 /** Why a watch is view-only (the panel words it); undefined when the person may use the page. */
 export type ViewOnlyReason = 'task' | 'closed' | 'user' | 'app' | 'unsupported';
@@ -202,6 +211,7 @@ export class WatchRegistry {
       locating: false,
       inputs: [],
       chain: Promise.resolve(),
+      finalTried: false,
     };
     this.watches.set(watch.id, watch);
     this.ensureStream(watch);
@@ -251,6 +261,7 @@ export class WatchRegistry {
       watch.view = { width: Math.round(view.width), height: Math.round(view.height) };
     this.ensureStream(watch);
     this.refreshLocation(watch);
+    this.loadFinal(watch);
     const info: Record<string, unknown> =
       watch.source.kind === 'task'
         ? describeTask(watch.source.entry, now)
@@ -283,7 +294,8 @@ export class WatchRegistry {
         ? {
             frame: {
               data: frame.data,
-              mimeType: 'image/jpeg',
+              mimeType: frame.mimeType ?? 'image/jpeg',
+              ...(frame.final ? { final: true } : {}),
               width: frame.width,
               height: frame.height,
               ts: frame.ts,
@@ -417,6 +429,50 @@ export class WatchRegistry {
       });
   }
 
+  /**
+   * A task's watch that has no live frame yet (opened or re-mounted later, or after the task ended) shows the task's
+   * kept last picture at once; a finished task with none falls back to its final screenshot file, read once, only
+   * from the task's own result.
+   */
+  private loadFinal(watch: Watch): void {
+    if (watch.source.kind !== 'task') return;
+    const entry = watch.source.entry;
+    const kept = entry.lastFrame;
+    // A live watch of a task that just ended moves to the clean end picture, taken after its last live frame.
+    const newer =
+      watch.frame !== null &&
+      watch.frame.final !== true &&
+      entry.state === 'finished' &&
+      kept !== null &&
+      kept.at > watch.frame.receivedAt;
+    if (watch.frame && !newer) return;
+    if (kept) {
+      watch.seq += 1;
+      watch.frame = {
+        data: kept.data,
+        width: kept.width,
+        height: kept.height,
+        bytes: kept.bytes,
+        ts: kept.at,
+        receivedAt: kept.at,
+        ...(entry.state === 'finished' ? { final: true } : {}),
+      };
+      return;
+    }
+    if (entry.state !== 'finished' || watch.finalTried) return;
+    watch.finalTried = true;
+    const path = finalScreenshot(entry.output);
+    if (!path) return;
+    void readImage(path)
+      .then((image) => {
+        if (!image || watch.frame) return;
+        const at = entry.finishedAt ?? this.now();
+        watch.seq += 1;
+        watch.frame = { ...image, ts: at, receivedAt: at, final: true };
+      })
+      .catch(() => undefined);
+  }
+
   private ensureStream(watch: Watch): void {
     const target = this.currentTarget(watch);
     const size = streamSize(watch.view);
@@ -454,6 +510,15 @@ export class WatchRegistry {
               ? { pageWidth: meta.pageWidth, pageHeight: meta.pageHeight }
               : {}),
           };
+          // The task keeps its newest picture, so a panel opened after it ends still shows the page.
+          if (watch.source.kind === 'task' && bytes <= KEPT_FRAME_MAX_BYTES)
+            watch.source.entry.lastFrame = {
+              data,
+              width: meta.width,
+              height: meta.height,
+              bytes,
+              at: this.now(),
+            };
           // Keep frames bounded: a heavy page gets a lower quality from the next poll on.
           if (bytes > FRAME_MAX_BYTES && watch.quality > QUALITY.min)
             watch.quality = Math.max(QUALITY.min, watch.quality - QUALITY.step);
@@ -516,4 +581,43 @@ export function viewOnlyReason(
   if (target.backend === 'app') return 'app';
   if (!target.panelInput) return 'unsupported';
   return undefined;
+}
+
+/** The path of a task result's final screenshot (else its last screenshot), or null. */
+export function finalScreenshot(output: Record<string, unknown> | null): string | null {
+  const artifacts = output?.['artifacts'];
+  if (!Array.isArray(artifacts)) return null;
+  const shots = artifacts.filter(
+    (artifact): artifact is { kind: string; path: string; label?: string } =>
+      typeof artifact === 'object' &&
+      artifact !== null &&
+      (artifact as { kind?: unknown }).kind === 'screenshot' &&
+      typeof (artifact as { path?: unknown }).path === 'string',
+  );
+  return (shots.find((shot) => shot.label === 'final') ?? shots.at(-1))?.path ?? null;
+}
+
+/** A PNG or JPEG file as a panel frame (base64, size), or null when it is not a small regular image file. */
+async function readImage(
+  path: string,
+): Promise<Pick<Frame, 'data' | 'width' | 'height' | 'bytes' | 'mimeType'> | null> {
+  const handle = await open(path, 'r');
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size === 0 || info.size > FINAL_MAX_BYTES) return null;
+    const bytes = await handle.readFile();
+    const data = bytes.toString('base64');
+    if (bytes.length > 24 && bytes.readUInt32BE(0) === 0x89504e47)
+      return {
+        data,
+        mimeType: 'image/png',
+        width: bytes.readUInt32BE(16),
+        height: bytes.readUInt32BE(20),
+        bytes: bytes.length,
+      };
+    const size = jpegSize(data);
+    return size ? { data, mimeType: 'image/jpeg', ...size, bytes: bytes.length } : null;
+  } finally {
+    await handle.close();
+  }
 }

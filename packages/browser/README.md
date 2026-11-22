@@ -46,12 +46,16 @@ Built and tested on the managed backend. A user-backend tab has the same `screen
 and record run there too, but that path is not exercised by these tests.
 
 - `browser.task` with `wait: false` returns `{taskId, status: "running"}` at once. `browser.task.get` reports its state,
-  phase and newest trace step (and the full result once finished), `browser.task.list` lists running and recent tasks
+  phase, `doing` (what it is doing now in plain words: `Clicking "Travel"`, `Typing into "Search"`, `Reading the page`;
+  every trace step carries the same words as `say`) and newest trace step (and the full result once finished), `browser.task.list` lists running and recent tasks
   (kept 30 minutes), `browser.task.cancel` stops it before its next action (an in-flight decision is abandoned, an
   action already sent runs to its end), closes the tab it opened (even with `keepOpen`) and ends it as `cancelled`.
 - `browser.watch({taskId | sessionId})` opens the extension's `watch` application in the side panel: the page live
-  (the tab's `Page.startScreencast`, running only while the panel polls `browser.watch.frame`), the step the engine is
-  on (action, rung, ms) and a Stop button that calls `browser.task.cancel`. `open: false` returns the
+  (the tab's `Page.startScreencast`, running only while the panel polls `browser.watch.frame`), what the task is doing
+  in plain words (the engine's raw step, with refs, rung, timings and plan notes, behind a Details toggle) and a Stop
+  button that calls `browser.task.cancel`. A task keeps its last picture in memory (the newest live frame a watch saw,
+  else one 1280-wide JPEG taken before its tab closes, at most 400 KB), so a panel opened or re-mounted after the task
+  ended shows that picture with the end status (`frame.final: true`); with neither, the task's final screenshot file. `open: false` returns the
   `ui.application.open` input instead; `browser.watch.close` ends a watch.
 - The panel reads like a browser: an address bar (title, URL with the host emphasized, a live dot that blips on each
   new frame), the picture fitted to both sides of the panel and centered (the panel never scrolls), and a status line

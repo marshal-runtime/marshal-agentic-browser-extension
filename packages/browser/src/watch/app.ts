@@ -108,6 +108,18 @@ const HTML = String.raw`<!doctype html>
   .status { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 5px 10px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--soft); }
   .status .text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .status .meta { flex: none; font-variant-numeric: tabular-nums; opacity: .8; }
+  .more {
+    flex: none; font: inherit; font-size: 11px; padding: 1px 7px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--soft);
+  }
+  .more:hover { color: var(--foreground, CanvasText); background: var(--hover, var(--accent, transparent)); }
+  .more[aria-expanded="true"] { color: var(--foreground, CanvasText); }
+  .details {
+    max-height: 35%; overflow: auto; margin: 0; padding: 6px 10px; border-top: 1px solid var(--line);
+    font: 11px/1.45 var(--font-mono, ui-monospace, monospace); color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere;
+    background: var(--card, Canvas);
+  }
+  body.touch .more { min-height: 32px; padding: 4px 12px; font-size: 12.5px; }
 
   body.touch { font-size: 14px; }
   body.touch .icon { width: 40px; height: 40px; }
@@ -138,9 +150,11 @@ const HTML = String.raw`<!doctype html>
   <div class="empty" id="empty">Waiting for the first picture…</div>
   <div class="note" id="note" role="status" hidden></div>
 </main>
+<pre class="details" id="details" hidden></pre>
 <footer class="status">
   <span class="text"><span id="state" role="status" aria-live="polite"></span><span id="age" aria-hidden="true"></span></span>
   <span class="meta" id="meta"></span>
+  <button type="button" class="more" id="more" aria-expanded="false" aria-controls="details" hidden>Details</button>
 </footer>
 <script>
 (() => {
@@ -167,6 +181,8 @@ const HTML = String.raw`<!doctype html>
   let interactive = false;
   let lastInputAt = 0;
   let noteTimer = null;
+  let finalShot = false;      // the picture is the finished task's last picture, not a live frame
+  let finalLooks = 0;
   const $ = (id) => document.getElementById(id);
   const stage = $('stage');
   const canvas = $('canvas');
@@ -265,15 +281,35 @@ const HTML = String.raw`<!doctype html>
     const m = Math.round(s / 60);
     return m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
   }
+  // The status line says what the task is doing in plain words (the extension's doing / step say); the engine's own
+  // wording (refs, rungs, timings, confidences, plan notes) is behind Details.
   function describeStep(state) {
     const s = state.lastStep;
-    if (!s) return state.phase ? 'Starting · ' + state.phase + '…' : 'Starting…';
-    // The engine's note (plan bookkeeping, checks) is for the trace, not the status line: it goes in the tooltip.
-    $('state').title = s.note ? String(s.note) : '';
-    let text = 'Step ' + s.step + ' · ' + String(s.action).replace(/_/g, ' ');
-    if (s.outcome && s.outcome !== 'ok') text += ' (' + s.outcome + ')';
-    if (state.phase && state.phase !== 'finished') text += ' · ' + state.phase + '…';
-    return text;
+    return state.doing || (s && s.say) || 'Starting';
+  }
+  const END = {
+    done: 'Done', low_confidence: 'Stopped: not sure the goal was met', needs_owner: 'Needs you to decide',
+    needs_input: 'Needs a value from you', blocked: 'Stuck', cancelled: 'Stopped', failed: 'Failed',
+    budget: 'Ran out of time', decisions_unavailable: 'Could not reach the model',
+  };
+  function endText(status) {
+    return END[status] || (status.charAt(0).toUpperCase() + status.slice(1)).replace(/_/g, ' ');
+  }
+  const RUNG = { 0: 'code', 1: 'decision', 2: 'extract' };
+  function rawStep(state) {
+    const s = state.lastStep;
+    if (!s) return '';
+    const head = ['Step ' + s.step, s.action, 'rung ' + s.rung + (RUNG[s.rung] ? ' (' + RUNG[s.rung] + ')' : '')];
+    if (typeof s.ms === 'number') head.push(s.ms + ' ms');
+    if (typeof s.actMs === 'number') head.push('act ' + s.actMs + ' ms');
+    if (typeof s.confidence === 'number') head.push('conf ' + s.confidence);
+    if (s.outcome) head.push(s.outcome);
+    const lines = [head.join(' · ')];
+    if (s.note) lines.push(String(s.note));
+    if (s.checks) lines.push('goal met ' + s.checks.goalMet + ' · needs owner ' + s.checks.needsOwner + ' · page ready ' + s.checks.pageReady);
+    lines.push('phase ' + (state.phase || '?') + ' · ' + (state.steps || 0) + ' actions · ' + Math.round((state.elapsedMs || 0) / 1000) + ' s');
+    if (s.url) lines.push(String(s.url));
+    return lines.join('\n');
   }
   const VIEW_ONLY = {
     task: ['View only', 'A task is driving this tab. Stop it to use the page yourself.'],
@@ -287,18 +323,20 @@ const HTML = String.raw`<!doctype html>
     const running = state.state === 'running';
     const status = state.status || (running ? 'running' : 'finished');
     // Address bar.
-    const parts = splitUrl(state.url || '');
+    // A finished task's tab is gone: its last step still says where it ended.
+    const url = state.url || (state.lastStep && state.lastStep.url) || '';
+    const parts = splitUrl(url);
     setText('title', state.title || parts.host || (state.kind === 'task' ? 'Browser task' : 'Browser session'));
     setText('host', parts.host);
     setText('path', parts.rest);
-    $('url').title = state.url || '';
+    $('url').title = url;
     $('title').title = state.title || '';
     canvas.setAttribute('aria-label', 'Live view of ' + (state.title || parts.host || 'the page'));
     // Task row and Stop.
     $('task').hidden = !taskId;
     if (taskId && state.goal) { setText('goal', state.goal); $('goal').title = state.goal; }
     const stop = $('stop');
-    stop.hidden = !taskId;
+    stop.hidden = !taskId || !running;
     stop.disabled = !running || status === 'cancelling';
     // Interactive or view only.
     interactive = state.interactive === true && running;
@@ -314,12 +352,17 @@ const HTML = String.raw`<!doctype html>
     let text;
     if (!running) {
       if (state.kind === 'session' && !taskId) text = 'Session closed';
-      else text = status.charAt(0).toUpperCase() + status.slice(1) + (state.steps ? ' · ' + state.steps + ' actions' : '') + (typeof state.elapsedMs === 'number' ? ' in ' + Math.round(state.elapsedMs / 1000) + ' s' : '');
-    } else if (taskId) text = status === 'cancelling' ? 'Stopping…' : describeStep(state);
+      else text = endText(status) + (state.steps ? ' · ' + state.steps + (state.steps === 1 ? ' action' : ' actions') : '') + (typeof state.elapsedMs === 'number' ? ' in ' + Math.round(state.elapsedMs / 1000) + ' s' : '');
+    } else if (taskId) text = status === 'cancelling' ? 'Stopping…' : describeStep(state) + '…';
     else text = 'Live';
     if (state.streamError) text += ' · no picture: ' + state.streamError;
     setText('state', text);
+    const raw = taskId ? rawStep(state) : '';
+    $('more').hidden = !raw;
+    if (!raw) { $('details').hidden = true; $('more').setAttribute('aria-expanded', 'false'); }
+    else if ($('details').textContent !== raw) $('details').textContent = raw;
     const meta = [];
+    if (finalShot) meta.push('Last picture');
     if (frameSize) meta.push(frameSize.width + '×' + frameSize.height);
     if (typeof state.frameBytes === 'number') meta.push(Math.round(state.frameBytes / 1024) + ' KB');
     setText('meta', meta.join(' · '));
@@ -375,11 +418,12 @@ const HTML = String.raw`<!doctype html>
       lastOkAt = Date.now();
       if (typeof state.now === 'number') clockSkew = state.now - Date.now();
       const hadFrame = Boolean(state.frame);
-      if (state.frame) await draw(state.frame);
+      if (state.frame) { finalShot = state.frame.final === true; await draw(state.frame); }
       if (typeof state.seq === 'number') seq = state.seq;
       render(state);
       const busy = hadFrame || Date.now() - lastInputAt < 3000;
-      schedule(state.state !== 'running' ? 2000 : busy ? 200 : 500);
+      // A finished task's final screenshot is read from disk on the first poll: look again soon for it.
+      schedule(state.state !== 'running' ? (!bitmap && finalLooks++ < 5 ? 400 : 2000) : busy ? 200 : 500);
     } catch (error) {
       failures += 1;
       tick();
@@ -522,6 +566,11 @@ const HTML = String.raw`<!doctype html>
     const clean = pasted.replace(/[\r\n\t]+/g, ' ').replace(/\p{Cc}/gu, '').slice(0, 512);
     flushText();
     for (let at = 0; at < clean.length; at += 64) send({ kind: 'text', text: clean.slice(at, at + 64) });
+  });
+  $('more').addEventListener('click', () => {
+    const open = $('more').getAttribute('aria-expanded') !== 'true';
+    $('more').setAttribute('aria-expanded', String(open));
+    $('details').hidden = !open;
   });
   for (const kind of ['back', 'forward', 'reload']) $(kind).addEventListener('click', () => send({ kind }));
 

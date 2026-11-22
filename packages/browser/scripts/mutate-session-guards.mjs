@@ -482,6 +482,96 @@ MUTATIONS.push(
   },
 );
 
+// A finished task's last picture, and the plain step words (T3).
+const FINAL = 'tests/watch-final.test.ts';
+const WORDS = 'tests/task-words.test.ts';
+MUTATIONS.push(
+  {
+    name: 'final: live frames not kept on the task',
+    file: 'src/watch/watches.ts',
+    from: "if (watch.source.kind === 'task' && bytes <= KEPT_FRAME_MAX_BYTES)",
+    to: 'if (false as boolean)',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no bound on a kept live frame',
+    file: 'src/watch/watches.ts',
+    from: "if (watch.source.kind === 'task' && bytes <= KEPT_FRAME_MAX_BYTES)",
+    to: "if (watch.source.kind === 'task')",
+    tests: [FINAL],
+  },
+  {
+    name: 'final: a running task marked final',
+    file: 'src/watch/watches.ts',
+    from: "...(entry.state === 'finished' ? { final: true } : {}),",
+    to: '...{ final: true },',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: the live watch keeps the marked last frame after the end',
+    file: 'src/watch/watches.ts',
+    from: '      kept.at > watch.frame.receivedAt;',
+    to: '      false;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no size bound on the screenshot file',
+    file: 'src/watch/watches.ts',
+    from: 'info.size > FINAL_MAX_BYTES',
+    to: 'false',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: a failed end capture drops the live frame',
+    file: 'src/tasks.ts',
+    from: '    if (!shot) return;',
+    to: '    entry.lastFrame = null;\n    if (!shot) return;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no bound on the end picture',
+    file: 'src/tasks.ts',
+    from: 'bytes > KEPT_FRAME_MAX_BYTES) return;',
+    to: 'false) return;',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: end picture capture not time-bounded',
+    file: 'src/tasks.ts',
+    from: '          resolve(null);\n        }, END_SHOT_WAIT_MS);',
+    to: '        }, 2e9);',
+    tests: [FINAL],
+  },
+  {
+    name: 'final: no end picture before the tab closes',
+    file: 'src/capabilities.ts',
+    from: '        await keepEndPicture(task, session.tab);',
+    to: '',
+    tests: [PANEL_REAL],
+  },
+  {
+    name: 'words: doing ignores the phase',
+    file: 'src/tasks.ts',
+    from: "(entry.phase === 'acting' && entry.doing) ||",
+    to: 'entry.doing ||',
+    tests: [WORDS],
+  },
+  {
+    name: 'words: the engine action instead of the element',
+    file: 'src/engine/say.ts',
+    from: '      return `Clicking ${name}`;',
+    to: '      return `Clicking ${offer.action}`;',
+    tests: [WORDS],
+  },
+  {
+    name: 'words: the panel shows the raw step',
+    file: 'src/watch/app.ts',
+    from: "return state.doing || (s && s.say) || 'Starting';",
+    to: "return (s && s.action) || state.doing || 'Starting';",
+    tests: [WORDS],
+  },
+);
+
 const only = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : undefined;

@@ -29,10 +29,19 @@ const TASK_SUMMARY = {
     description:
       'starting | routing | navigating | reading | deciding | acting | waiting | extracting | closing | finished',
   },
+  doing: {
+    type: 'string',
+    description:
+      'While running: what it is doing now in plain words (Clicking "Travel", Reading the page).',
+  },
   steps: { type: 'number' },
   elapsedMs: { type: 'number' },
   sessionId: { type: 'string' },
-  lastStep: { type: 'object', description: 'The newest trace step: action, rung, ms, outcome.' },
+  lastStep: {
+    type: 'object',
+    description:
+      'The newest trace step: action, rung, ms, outcome, and `say` (the step in plain words).',
+  },
 } as const;
 const VIDEO = object({
   path: { type: 'string' },
@@ -54,7 +63,7 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.task.get',
-    version: '0.2.0',
+    version: '0.2.1',
     title: 'Progress or result of a task',
     description:
       'The state of a browser.task by taskId: running (with its phase and newest step) or finished (with the full result in `result`). Finished tasks are kept for 30 minutes.',
@@ -158,7 +167,12 @@ export const LIFECYCLE_DESCRIPTORS: readonly CapabilityDescriptor[] = [
         streamError: { type: 'string' },
         frame: object({
           data: { type: 'string' },
-          mimeType: { type: 'string' },
+          mimeType: { enum: ['image/jpeg', 'image/png'] },
+          final: {
+            type: 'boolean',
+            description:
+              "The finished task's last picture (a panel opened or re-mounted after the task ended).",
+          },
           width: { type: 'number' },
           height: { type: 'number' },
           ts: { type: 'number' },

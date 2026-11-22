@@ -164,3 +164,33 @@ describe.skipIf(!chrome.path)('live panel input in a real Chrome', () => {
     );
   });
 });
+
+describe.skipIf(!chrome.path)('a finished task, watched afterwards (real Chrome)', () => {
+  it('a panel opened after the task ended shows its last picture and Done', async () => {
+    const done = new BrowserService(() => new FakeDecider([{ choice: 'done', goalMet: 0.95 }]), {
+      artifactDir: path.join(os.tmpdir(), 'mb-watch-final-real'),
+    });
+    try {
+      const run = (
+        await done.invoke('browser.task', { goal: 'look at the form', startUrl: `${base}/form` })
+      ).output as Record<string, unknown>;
+      expect(run['status'], JSON.stringify(run)).toBe('done');
+      // A clean done saves no final screenshot file: the picture is the one kept before the tab closed.
+      expect(run['artifacts']).toEqual([]);
+      const watched = (await done.invoke('browser.watch', { taskId: run['taskId'], open: false }))
+        .output as Record<string, unknown>;
+      expect(watched['ok'], JSON.stringify(watched)).toBe(true);
+      const state = (await done.invoke('browser.watch.frame', { watchId: watched['watchId'] }))
+        .output as Record<string, unknown>;
+      expect(state).toMatchObject({ state: 'finished', status: 'done' });
+      expect(state['frame']).toMatchObject({
+        mimeType: 'image/jpeg',
+        width: 1280,
+        height: 800,
+        final: true,
+      });
+    } finally {
+      await done.dispose();
+    }
+  }, 60_000);
+});
