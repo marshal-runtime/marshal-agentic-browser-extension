@@ -340,6 +340,9 @@ await activation.dispose();
   `.scroll`, `.wait`) in the same shapes; a screenshot may return `{data: <base64 PNG>, width}` instead of a file path.
   The picture's format is read from its bytes: a JPEG (the Marley extension sends one for a page whose PNG is too
   large) is passed on as `image/jpeg` without marks or scaling; anything other than PNG or JPEG is refused as `failed`.
+  Such a JPEG reaches `decide` unscaled, up to 5,000,000 base64 characters plus its `data:image/jpeg;base64,` prefix, so
+  the host's decide service must accept an image that large (Marley's `/zs/decide` refused a 3.3 M picture at a 2.8 M
+  cap with `JEV_BAD_REQUEST`).
   It refuses with `new mb.BridgeError(code, message, hostCode)`:
   - `not_connected`: the Chrome is gone; a task stops with `needs_owner` / `user_browser_not_connected` and the setup;
   - `needs_owner`: the host wants the person's approval first (a per-site card); a task or a session act stops with
