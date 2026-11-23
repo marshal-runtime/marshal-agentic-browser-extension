@@ -220,6 +220,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       needsRealInput: { type: 'boolean' },
       realInput: { type: 'boolean' },
       status: { type: 'string' },
+      reason: { type: 'string' },
       backend: { type: 'string' },
       dialog: DIALOG,
     }),
@@ -292,10 +293,10 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     protocolVersion: '1.0.0',
     name: 'browser.task',
-    version: '0.1.0',
+    version: '0.4.0',
     title: 'Do a browser task',
     description:
-      'Gives a goal ("open X and get me Y") to a code loop: each step one marshal.models.decide call with a marked screenshot picks the action, code guards stop on off-site, sign-in-grant or payment links. Returns status done | needs_input | needs_owner | blocked | low_confidence | budget | decisions_unavailable | cancelled, the data/text/screenshot asked for in want, and a per-step trace.',
+      'Gives a goal ("open X and get me Y") to a code loop: each step one marshal.models.decide call with a marked screenshot picks the action, code guards stop on off-site, sign-in-grant or payment links. Returns status done | needs_input | needs_owner | blocked | low_confidence | budget | decisions_unavailable | cancelled | unknown (a step was sent through the relay of an embedding host and its answer lost: it may have happened, never retried), the data/text/screenshot asked for in want, and a per-step trace.',
     inputSchema: object(
       {
         goal: { type: 'string' },
@@ -377,6 +378,7 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
           'budget',
           'decisions_unavailable',
           'cancelled',
+          'unknown',
           'recorder_unavailable',
           'running',
         ],

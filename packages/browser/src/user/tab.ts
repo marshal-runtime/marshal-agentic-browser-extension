@@ -21,9 +21,23 @@ import type {
   Target,
   TargetAction,
 } from '../target.js';
-import { EDITING_KEYS, unsupportedOn } from '../target.js';
-import { BridgeError, type BridgeClient, type BridgeSnapshot, type BridgeTab } from './bridge.js';
-import { decodePng, drawMarks, encodeJpeg, encodePng, scaleTo, type Mark } from './image.js';
+import { EDITING_KEYS, TargetHalt, unsupportedOn } from '../target.js';
+import {
+  BridgeError,
+  bridgeErrorOf,
+  type BridgeClient,
+  type BridgeSnapshot,
+  type BridgeTab,
+} from './bridge.js';
+import {
+  decodePng,
+  drawMarks,
+  encodeJpeg,
+  encodePng,
+  imageFormat,
+  scaleTo,
+  type Mark,
+} from './image.js';
 import { startScreencast } from './screencast.js';
 import { bridgeToSnapshot } from './snapshot.js';
 
@@ -46,6 +60,8 @@ export class UserTab implements Target {
   readonly backend = 'user';
   private last: Snapshot | null = null;
   private closed = false;
+  /** Set once the transport halted a step (approval, lost answer, Chrome gone): nothing more is sent but the close. */
+  private haltedBy: TargetHalt | null = null;
   private readonly read: (path: string) => Promise<Buffer>;
   private readonly remove: (path: string) => Promise<void>;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -66,7 +82,11 @@ export class UserTab implements Target {
   static async open(bridge: BridgeClient, url: string, deps: UserTabDeps = {}): Promise<UserTab> {
     if (!/^https?:\/\//i.test(url))
       throw new Error('BROWSER_BAD_INPUT: the user backend opens only http(s) addresses');
-    const tab = await bridge.call<BridgeTab>('browserbridge.tabs.open', { url, active: false });
+    const tab = await bridge
+      .call<BridgeTab>('browserbridge.tabs.open', { url, active: false })
+      .catch((error: unknown) => {
+        throw haltOf(error) ?? error;
+      });
     if (!Number.isInteger(tab.tabId))
       throw new BridgeError('failed', 'tabs.open returned no tabId');
     return new UserTab(bridge, tab.tabId, deps);
@@ -78,6 +98,11 @@ export class UserTab implements Target {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** Whether the transport halted a step of this tab (then no end picture is taken through it). */
+  get halted(): boolean {
+    return this.haltedBy !== null;
   }
 
   /** Later calls go through the bridge client of the invocation that asks, so the host applies that caller's policy. */
@@ -104,7 +129,13 @@ export class UserTab implements Target {
     try {
       return await this.perform(action);
     } catch (error) {
-      // A failed step is an outcome the engine counts; a dead bridge shows up as the next snapshot's error.
+      // A refused or lost step ends the task (never retried); any other failed step is an outcome the engine counts.
+      if (error instanceof TargetHalt)
+        return {
+          ok: false,
+          error: error.message,
+          halt: { status: error.status, reason: error.reason },
+        };
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -223,7 +254,10 @@ export class UserTab implements Target {
   }
 
   async screenshot(options: ScreenshotOptions = {}): Promise<Shot> {
-    const { png, cssWidth } = await this.capture();
+    const { image: png, format: captured, cssWidth } = await this.capture();
+    // A JPEG (the Marley extension sends one when the PNG would be too large) goes as it is: no marks, no scaling (this
+    // package decodes PNG only). The decision still has the elements' refs in its text.
+    if (captured === 'jpeg') return { data: png.toString('base64'), mimeType: 'image/jpeg' };
     const marks = (options.marks ?? []).flatMap((element): Mark[] =>
       element.box && !element.offscreen ? [{ ref: element.ref, box: element.box }] : [],
     );
@@ -241,15 +275,28 @@ export class UserTab implements Target {
       : { data: encodePng(image).toString('base64'), mimeType: 'image/png' };
   }
 
-  /** The bridge writes its PNG to a file of its own; it is read once and removed (a picture of the person's page). */
-  async capture(): Promise<{ png: Buffer; cssWidth: number }> {
-    const shot = await this.call<{ path?: string; width?: number }>('browserbridge.screenshot', {
-      tabId: this.tabId,
-    });
+  /**
+   * The bridge writes its picture to a file of its own; it is read once and removed (a picture of the person's page).
+   * The format comes from the picture's own bytes (PNG, or the JPEG the extension sends for a very large page), never
+   * from a field; anything else is refused.
+   */
+  async capture(): Promise<{ image: Buffer; format: 'png' | 'jpeg'; cssWidth: number }> {
+    const shot = await this.call<{ path?: string; data?: string; width?: number }>(
+      'browserbridge.screenshot',
+      { tabId: this.tabId },
+    );
+    const typed = (image: Buffer): { image: Buffer; format: 'png' | 'jpeg'; cssWidth: number } => {
+      const format = imageFormat(image);
+      if (!format) throw new BridgeError('failed', 'screenshot is neither a PNG nor a JPEG');
+      return { image, format, cssWidth: Number(shot.width) || 0 };
+    };
+    // An embedding host's transport may hand the picture over directly instead of a file.
+    if (typeof shot.data === 'string' && shot.data && shot.path === undefined)
+      return typed(Buffer.from(shot.data, 'base64'));
     if (typeof shot.path !== 'string' || !shot.path)
       throw new BridgeError('failed', 'screenshot returned no file');
     try {
-      return { png: await this.read(shot.path), cssWidth: Number(shot.width) || 0 };
+      return typed(await this.read(shot.path));
     } finally {
       await this.remove(shot.path).catch(() => undefined);
     }
@@ -301,9 +348,29 @@ export class UserTab implements Target {
     try {
       return await this.bridge.call<T>(name, input);
     } catch (error) {
+      const typed = bridgeErrorOf(error);
       // The person closed the tab or took it out of the group: this session is over.
-      if (error instanceof BridgeError && error.code === 'no_tab') this.closed = true;
-      throw error;
+      if (typed?.code === 'no_tab') this.closed = true;
+      const halt = haltOf(typed);
+      if (halt) this.haltedBy = halt;
+      throw halt ?? typed ?? error;
     }
   }
+}
+
+/**
+ * A transport refusal the task must stop on: the person's approval (`needs_owner`), a Chrome that left
+ * (`not_connected`, reported as needs_owner with the pairing reason) or a lost answer (`unknown`).
+ */
+function haltOf(error: unknown): TargetHalt | null {
+  const typed = bridgeErrorOf(error);
+  if (!typed) return null;
+  const detail = typed.message.slice(typed.code.length + 2);
+  if (typed.code === 'needs_owner')
+    return new TargetHalt('needs_owner', `approval_required: ${detail}`, typed.message);
+  if (typed.code === 'not_connected')
+    return new TargetHalt('needs_owner', 'user_browser_not_connected', typed.message);
+  if (typed.code === 'unknown')
+    return new TargetHalt('unknown', `outcome_unknown: ${detail}`, typed.message);
+  return null;
 }

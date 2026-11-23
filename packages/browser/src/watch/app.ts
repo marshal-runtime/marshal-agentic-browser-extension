@@ -486,6 +486,7 @@ const HTML = String.raw`<!doctype html>
     done: 'Done', low_confidence: 'Stopped: not sure the goal was met', needs_owner: 'Needs you to decide',
     needs_input: 'Needs a value from you', blocked: 'Stuck', cancelled: 'Stopped', failed: 'Failed',
     budget: 'Ran out of time', decisions_unavailable: 'Could not reach the model',
+    unknown: 'Stopped: the last step may or may not have happened',
   };
   function endText(status) {
     return END[status] || (status.charAt(0).toUpperCase() + status.slice(1)).replace(/_/g, ' ');
@@ -922,7 +923,7 @@ const HTML = String.raw`<!doctype html>
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedule(0); });
   matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)').addEventListener('change', layout);
   layout();
-  request('ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: 'Browser live view', version: '0.3.0' }, hostChrome: 'compact' })
+  request('ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: 'Browser live view', version: '0.4.0' }, hostChrome: 'compact' })
     .then((result) => {
       applyContext(result && result.hostContext);
       layout();

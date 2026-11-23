@@ -31,6 +31,7 @@ describe('step engine: one decide call per step', () => {
       'goal_met',
       'needs_owner',
       'next_action',
+      'page_part',
       'page_ready',
       'plan_needs_owner',
     ]);
@@ -71,9 +72,12 @@ describe('step engine: one decide call per step', () => {
       expect(typeof step.ms).toBe('number');
       expect(step.url).toBeTruthy();
     }
+    // The caller's loose schema goes in strict form (strict-schema.ts): the optional price becomes nullable.
     expect(decider.extracted[0]?.schema).toEqual({
       type: 'object',
-      properties: { price: { type: 'number' } },
+      properties: { price: { type: ['number', 'null'] } },
+      required: ['price'],
+      additionalProperties: false,
     });
   });
 });

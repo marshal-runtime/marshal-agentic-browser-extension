@@ -12,9 +12,30 @@ import type { CarriedExtension } from './status.js';
  *   - `not_connected`: no Chrome is attached (or it left mid-call);
  *   - `stale_ref`, `no_tab`: the element or the tab is gone;
  *   - `unsupported`: the carried bridge does not offer this verb (live frames before marley-browser-extension#4);
+ *   - `needs_owner`: the host's transport refused the step until the person approves it (an embedding host's relay,
+ *     e.g. a per-site card); the message says what to approve. Never retried here;
+ *   - `unknown`: the step was sent but its answer was lost, so it may have happened. Never retried (a click or a typed
+ *     value may not be safe to repeat); the task ends with status `unknown`;
  *   - `failed`: anything else the bridge or Chrome reported.
  */
-export type BridgeErrorCode = 'not_connected' | 'stale_ref' | 'no_tab' | 'unsupported' | 'failed';
+export type BridgeErrorCode =
+  | 'not_connected'
+  | 'stale_ref'
+  | 'no_tab'
+  | 'unsupported'
+  | 'needs_owner'
+  | 'unknown'
+  | 'failed';
+
+const CODES: ReadonlySet<string> = new Set([
+  'not_connected',
+  'stale_ref',
+  'no_tab',
+  'unsupported',
+  'needs_owner',
+  'unknown',
+  'failed',
+]);
 
 export class BridgeError extends Error {
   constructor(
@@ -26,6 +47,26 @@ export class BridgeError extends Error {
     super(`${code}: ${message}`);
     this.name = 'BridgeError';
   }
+}
+
+/**
+ * The typed bridge error an error is, or null. An embedding host may build its errors with another copy of this class
+ * (its own bundle), so a `BridgeError`-named error with a known code counts too; its message stays the host's.
+ */
+export function bridgeErrorOf(error: unknown): BridgeError | null {
+  if (error instanceof BridgeError) return error;
+  if (!(error instanceof Error) || error.name !== 'BridgeError') return null;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== 'string' || !CODES.has(code)) return null;
+  const bridgeCode = (error as { bridgeCode?: unknown }).bridgeCode;
+  const message = error.message.startsWith(`${code}: `)
+    ? error.message.slice(code.length + 2)
+    : error.message;
+  return new BridgeError(
+    code as BridgeErrorCode,
+    message,
+    typeof bridgeCode === 'string' ? bridgeCode : undefined,
+  );
 }
 
 /** Error codes the carried bridge (local-bridge.ts) and the Chrome extension (background.js) send. */

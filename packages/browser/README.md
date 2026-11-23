@@ -153,6 +153,18 @@ Fewer and overlapping calls (`src/engine/plan.ts`, `values.ts`, `speculate.ts`, 
   the goal, or the previous plan expected the goal met), the extract starts beside the decision on an unmarked capture
   and is used only if the decision confirms the goal on that same page. An unused one is counted in
   `stats.unusedCalls`. `speculativeExtract` (default true).
+- **Strict data schema.** The extract sends `want.data` in the strict form structured-output services require (every
+  object with `properties` gets `additionalProperties: false` and all its keys in `required`; a key the caller left
+  optional becomes nullable), and the answer comes back in the caller's shape (those nulls removed). A loose schema
+  made OpenAI refuse the extract (`extract_failed`) after the goal was met.
+- **Facts on several pages.** Each decision also asks `page_part` (does this page show part of the goal?). When the task
+  moves on from such a page, one extract copies what it shows of the goal (from the text and picture the decision
+  already had; at most 6 pages, each once), and later decisions, the goal check and the final extract see these notes;
+  value pointers give way to the extract once a note exists. Without notes a goal split over two pages looped between
+  them until `step_limit`. `pageNotes` (default true).
+- **Loop guard.** The same move between two pages (URL without its fragment) made again with no new note since stops
+  the task as `blocked` with reason `page_loop: back and forth between <A> and <B> without new facts`, instead of
+  spending the step budget.
 - **Parallel awaits.** `on: "auto"` starts the managed Chrome process while the routing question is asked (no tab before
   the route is known); that routing question and the start-page triage are one request; `browser.ask` reads the
   snapshot, screenshot and text together; step screenshots are saved beside the decision. Two actions never run at once.
@@ -278,12 +290,76 @@ own Chrome). Marshal's permission is per capability, so the input does not chang
 
 ## Configuration
 
-`chromePath`, `profileRoot`, `headed`, `artifactDir`, `minConfidence`, `maxSteps`, `wallMs`, `vision`,
-`keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `userVision`, `axHelperPath`, `ocrHelperPath`, `ffmpegPath`,
-`bridgePort`, `chromeExtensionDir` (see `runtime-extension.json`).
+`chromePath`, `profileRoot`, `profileSlot`, `tempRoot`, `headed`, `chromeSandbox`, `artifactDir`, `minConfidence`,
+`maxSteps`, `wallMs`, `vision`, `keepStepShots`, `planLength`, `valuePointers`, `speculativeExtract`, `pageNotes`, `userVision`,
+`axHelperPath`, `ocrHelperPath`, `ffmpegPath`, `bridgePort`, `chromeExtensionDir`, `localBridge`, `carryChromeExtension`
+(see `runtime-extension.json`).
 Without `chromePath`, Chrome comes from `MARSHAL_BROWSER_CHROME`, then `MARSHAL_SDK_CHROME` (the Chrome a marshal-sdk host
 found), then the usual install paths. On Linux, Chrome gets `--disable-dev-shm-usage` (containers give /dev/shm 64 MB),
-and `--no-sandbox` only when the process runs as root (Chrome refuses to start as root otherwise).
+and `--no-sandbox` only when the process runs as root (Chrome refuses to start as root otherwise) or `chromeSandbox` is
+false.
+
+## Embedding in another host
+
+`dist/runtime.cjs` also exports `activateEmbedded` for a host that is not Marshal (0.4.0; Marley's brand-VM runtime is
+the first). It returns the same provider (`capabilityProviders[0]`, id `@marshal/browser`, every `browser.*` capability)
+and needs nothing from Marshal:
+
+```js
+const mb = require('<vendored>/dist/runtime.cjs'); // CommonJS, Node 22+, no dependency outside the file
+const activation = await mb.activateEmbedded({
+  configuration: {
+    profileRoot: '/home/<chat>/chrome-profiles', // the lasting `agent` profile's parent
+    profileSlot: 'w0123456789', // optional: <profileRoot>/agent-<slot>, one per concurrent worker
+    tempRoot: '/tmp/zsmb-xxxx', // optional: throwaway visitor/offline profiles (short: Chrome's sockets)
+    artifactDir: '/home/<chat>/work/browser', // screenshots, videos, the person's-Chrome pictures (0700)
+    headed: false, // explicit; not read from DISPLAY
+    chromePath: '/usr/bin/google-chrome-stable',
+    chromeSandbox: true, // false: --no-sandbox (a service whose limits forbid Chrome's sandbox)
+    userVision: true, // decisions on the person's Chrome carry its screenshot
+  },
+  decide: async (input, context) => output, // marshal.models.decide's input in, its output out
+  bridge: (context) => ({ call: async (verb, input) => result }), // the host's transport to the person's Chrome
+  userSetup: (reason, detail) => ({ summary, steps, pairUrl }), // the host's own pairing words
+  prepareLaunch: async ({ kind, headed }) => ({ env: { DISPLAY, XAUTHORITY }, headed }), // before each Chrome start
+});
+// ... provider.invoke('browser.task', {...}, context) ...
+await activation.dispose();
+```
+
+- **Secure defaults.** `localBridge` and `carryChromeExtension` default to false here (true in Marshal): no
+  127.0.0.1:17373 listener that other users of a shared machine could reach, and no extension folder copied. Without a
+  `bridge`, `on: "user"` reports `no_socket`.
+- **Models.** `decide` gets exactly the `marshal.models.decide` input (`{state, images?, questions}` or
+  `{question, schema, context, images?}`) and returns its output; the provider, model and key are the host's (this
+  package has no provider code). The empty probe of `browser.status` is answered without calling it. A thrown error
+  ends a task as `decisions_unavailable`. With `execute` instead (or as well), other targets go to it; `decide` wins
+  for `marshal.models.decide`.
+- **The person's Chrome.** `bridge(context)` returns a client answering the carried bridge's verbs
+  (`browserbridge.status`, `.tabs.list|open|navigate|focus|close`, `.snapshot`, `.screenshot`, `.click`, `.type`, `.key`,
+  `.scroll`, `.wait`) in the same shapes; a screenshot may return `{data: <base64 PNG>, width}` instead of a file path.
+  The picture's format is read from its bytes: a JPEG (the Marley extension sends one for a page whose PNG is too
+  large) is passed on as `image/jpeg` without marks or scaling; anything other than PNG or JPEG is refused as `failed`.
+  Such a JPEG reaches `decide` unscaled, up to 5,000,000 base64 characters plus its `data:image/jpeg;base64,` prefix, so
+  the host's decide service must accept an image that large (Marley's `/zs/decide` refused a 3.3 M picture at a 2.8 M
+  cap with `JEV_BAD_REQUEST`).
+  It refuses with `new mb.BridgeError(code, message, hostCode)`:
+  - `not_connected`: the Chrome is gone; a task stops with `needs_owner` / `user_browser_not_connected` and the setup;
+  - `needs_owner`: the host wants the person's approval first (a per-site card); a task or a session act stops with
+    `needs_owner` and reason `approval_required: <message>`;
+  - `unknown`: the step was sent and its answer lost; the task ends with status `unknown` (reason `outcome_unknown: …`);
+  - `no_tab`, `stale_ref`, `unsupported`, `failed` as with the carried bridge.
+    None of the first three is retried, and after one no further step (not even the end screenshot) goes through that
+    tab; only its close. An error of another copy of the class (the host's own bundle) counts by its name and code.
+- **Setup words.** `userSetup(reason, detail)` replaces the Load-unpacked steps in `browser.status` and in a refused
+  task: `{reason, summary, steps, pairUrl?, source: "host"}`, text capped, `pairUrl` kept only when https.
+- **Display.** With `prepareLaunch`, Chrome gets DISPLAY and XAUTHORITY only from its answer (an inherited one may name
+  an X server that died); on Linux a headed start without a DISPLAY runs headless.
+- **Apps.** `on: "app"` answers `{ok: false, status: "unavailable", reason: "not_macos"}` off macOS; no helper is looked
+  for.
+- **Vendoring.** `npm run pack:embed -- --out <dir>` writes `marshal-browser-embed-<version>.tgz` (+ `.sha256`) and the
+  same files unpacked: `dist/runtime.cjs`, `runtime-extension.json`, `package.json`, `README.md`, `SHA256SUMS`. No macOS
+  helper and no Chrome extension folder (tests/pack-embed.test.ts loads the packed bundle in a fresh Node).
 
 ## Build and test
 
@@ -295,13 +371,15 @@ npx vitest run     # engine (fake decide), app backend (fake helper process), un
                    # real Chrome (skipped without Chrome), lifecycle/screencast/watch/recorder units, and a real
                    # Chrome + ffmpeg recording checked with ffprobe (skipped without ffmpeg)
 node scripts/mutate-app-guards.mjs   # removes each app guard in turn; every removal must fail a test
-node scripts/mutate-session-guards.mjs   # the same for the session operations, the Chrome setup, the carried bridge
-                                         # and the carried Chrome extension (needs Chrome; --only <name prefix>)
+node scripts/mutate-session-guards.mjs   # the same for the session operations, the Chrome setup, the carried bridge,
+                                         # the carried Chrome extension and the embedding options (needs Chrome;
+                                         # --only <name prefix>)
 # tests/user.real.test.ts: the carried extension in a throwaway Chrome for Testing profile and the carried bridge
 # (MB_CHROME_FOR_TESTING, else Playwright's cached Chrome for Testing; skipped without one; never the person's Chrome)
 # the same through a clean marshal-sdk host with only this package (stage it without links first):
 node scripts/prove-user-carried.mjs --sdk <marshal-sdk dist/src/index.js> --package <copy> --out <dir> [--port-in-use 17373]
 npm run pack:org -- --out <dir>   # the org catalog archive: browser-<version>.tgz (helpers 0755, no links), .sha256, index.json
+npm run pack:embed -- --out <dir> # the archive an embedding host vendors (see Embedding in another host)
 ```
 
 Marshal's own extension packer writes every file 0644 and would strip `+x` from `dist/native/*`, so the org catalog
