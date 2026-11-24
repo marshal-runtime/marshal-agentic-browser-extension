@@ -12,18 +12,12 @@ enum Background {
     NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
   }
 
-  /// After an action, watches briefly whether the target app made itself frontmost; if it did, the app that was in
-  /// front before is brought back. Returns true when it had to.
-  static func restoreFront(previous: NSRunningApplication, target: pid_t) -> Bool {
+  /// After an action, watches briefly whether the target app came to the front. It is only reported (a bug to fix in
+  /// the path that caused it): this helper never activates any app on its own, the person's included.
+  static func targetCameForward(target: pid_t) -> Bool {
     var waited = 0
-    while waited < 400 {
-      if NSWorkspace.shared.frontmostApplication?.processIdentifier == target {
-        _ = previous.activate(options: [])
-        Thread.sleep(forTimeInterval: 0.1)
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier != target { return true }
-        _ = previous.activate(options: [.activateAllWindows])
-        return true
-      }
+    while waited < 300 {
+      if NSWorkspace.shared.frontmostApplication?.processIdentifier == target { return true }
       Thread.sleep(forTimeInterval: 0.1)
       waited += 100
     }

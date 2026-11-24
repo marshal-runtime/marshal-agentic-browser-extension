@@ -241,9 +241,8 @@ func outcomeResponse(_ id: Any?, _ outcome: Actions.Outcome, failure: String) ->
   return out
 }
 
-/// Ops that act on the target app. In background mode an action must not leave the person looking at the target: an
-/// app that brings itself forward in answer (Chrome does for a page's alert() or a file chooser) is put back behind
-/// the app that was in front.
+/// Ops that act on the target app. In background mode an action must never bring the target forward; if the target
+/// came to the front anyway, the response says so (targetCameForward) so the caller treats it as a bug.
 let actingOps: Set<String> = ["press", "confirm", "clickAt", "keys"]
 
 func handleRequest(_ request: [String: Any]) -> [String: Any] {
@@ -254,7 +253,7 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
   let before = NSWorkspace.shared.frontmostApplication
   var response = dispatch(request)
   guard let before, before.processIdentifier != pid_t(pid) else { return response }
-  if Background.restoreFront(previous: before, target: pid_t(pid)) { response["focusRestored"] = true }
+  if Background.targetCameForward(target: pid_t(pid)) { response["targetCameForward"] = true }
   return response
 }
 
