@@ -70,12 +70,12 @@ enum Actions {
     return Outcome(ok: click(at: point), realInput: true)
   }
 
-  /// Sets a text value through Accessibility. AXFocus moves the focus inside the target app (never brings the app to
-  /// the front). A field that ignores the value set is typed into in the background (select all, then the text) and
-  /// read back; only when that did not land and the caller opted into the foreground is the app brought to the front.
+  /// Sets a text value through Accessibility. A field that ignores the value set is typed into in the background
+  /// (select all, then the text) and read back; only when that did not land and the caller opted into the foreground
+  /// is the app brought to the front.
   static func setValue(_ element: AXUIElement, text: String, policy: InputPolicy, pid: pid_t) -> Outcome {
-    AXAttr.perform(element, action: "AXFocus")
-    _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
+    // The value is set with no focus write first: a focus write is the only thing here that could move the app, so it
+    // happens only right before typing, which needs the field focused for the keys to land in it.
     if AXAttr.set(element, kAXValueAttribute as String, text as CFTypeRef) {
       // Some fields accept the call and ignore it: read the value back. Chromium applies it a moment later, so the
       // read-back waits briefly before falling through to typing (typing over an applied value doubled it, live
@@ -89,6 +89,9 @@ enum Actions {
       return Outcome(ok: false, needsRealInput: true, detail: "the field does not take a value through Accessibility")
     }
     if policy.background {
+      if AXAttr.bool(element, kAXFocusedAttribute as String) != true {
+        _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
+      }
       if let frame = AXAttr.frame(element), AXAttr.bool(element, kAXFocusedAttribute as String) != true {
         _ = Background.click(pid: pid, at: CGPoint(x: frame.midX, y: frame.midY))
       }
@@ -101,6 +104,7 @@ enum Actions {
     }
     guard let frame = AXAttr.frame(element) else { return Outcome(ok: false, detail: "no frame for real typing") }
     activate(pid: pid)
+    _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
     _ = click(at: CGPoint(x: frame.midX, y: frame.midY))
     _ = key(name: "a", modifiers: ["cmd"])
     return Outcome(ok: type(text), realInput: true)

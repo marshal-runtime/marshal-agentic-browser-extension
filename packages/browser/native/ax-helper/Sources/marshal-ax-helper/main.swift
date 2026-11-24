@@ -243,7 +243,7 @@ func outcomeResponse(_ id: Any?, _ outcome: Actions.Outcome, failure: String) ->
 
 /// Ops that act on the target app. In background mode an action must never bring the target forward; if the target
 /// came to the front anyway, the response says so (targetCameForward) so the caller treats it as a bug.
-let actingOps: Set<String> = ["press", "confirm", "clickAt", "keys"]
+let actingOps: Set<String> = ["press", "setValue", "confirm", "clickAt", "keys"]
 
 func handleRequest(_ request: [String: Any]) -> [String: Any] {
   let op = request["op"] as? String ?? ""
