@@ -32,6 +32,17 @@ enum Background {
     return false
   }
 
+  /// Cmd+T, Cmd+N and Cmd+Shift+N: the shortcuts that open a new tab or window.
+  static func opensWindow(name: String, modifiers: [String]) -> Bool {
+    let flags = Actions.flags(for: modifiers)
+    guard flags.contains(.maskCommand), !flags.contains(.maskAlternate), !flags.contains(.maskControl) else { return false }
+    switch name.lowercased() {
+    case "t": return !flags.contains(.maskShift)
+    case "n": return true
+    default: return false
+    }
+  }
+
   @discardableResult
   static func key(pid: pid_t, name: String, modifiers: [String]) -> Bool {
     guard let code = Actions.keyCode(for: name) else { return false }

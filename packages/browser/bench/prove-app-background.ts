@@ -72,13 +72,18 @@ const step = async (
   const before = await snap();
   const fb = front();
   const pb = pointer();
+  const startedAt = Date.now();
   const result = await service.act({ sessionId }, action(before));
+  const endedAt = Date.now();
   await new Promise((r) => setTimeout(r, 600));
   const fa = front();
   const after = await snap();
   if (fb.endsWith(`:${targetPid}`) || fa.endsWith(`:${targetPid}`)) frontmostTarget = true;
   console.log(
     JSON.stringify({
+      startedAt,
+      endedAt,
+      targetPid,
       step: name,
       ok: result['ok'],
       realInput: result['realInput'] ?? false,
