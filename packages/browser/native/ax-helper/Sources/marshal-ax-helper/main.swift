@@ -322,12 +322,11 @@ func dispatch(_ request: [String: Any]) -> [String: Any] {
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
     guard let keys = request["keys"] as? [[String: Any]], !keys.isEmpty else { return errorResponse(id, "missing \"keys\"") }
-    // New-tab / new-window shortcuts make the app open a window and activate itself (Cmd+T posted to Chrome brought it
-    // to the front about 0.2 s later, measured with lsappinfo 2026-11-24): never sent in the background.
+    // Shortcuts that make the app activate itself (Background.raisesApp) are never sent in the background.
     if !allowForeground,
-      let index = keys.firstIndex(where: { Background.opensWindow(name: $0["name"] as? String ?? "", modifiers: $0["modifiers"] as? [String] ?? []) })
+      let index = keys.firstIndex(where: { Background.raisesApp(name: $0["name"] as? String ?? "", modifiers: $0["modifiers"] as? [String] ?? []) })
     {
-      var out = errorResponse(id, "keys[\(index)] opens a tab or window, which brings the app to the front: it needs allowForeground")
+      var out = errorResponse(id, "keys[\(index)] brings the app to the front when sent: it needs allowForeground")
       out["needsForeground"] = true
       return out
     }
