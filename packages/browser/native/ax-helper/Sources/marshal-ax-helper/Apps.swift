@@ -18,7 +18,8 @@ enum Apps {
   }
 
   static func list() -> [[String: Any]] {
-    NSWorkspace.shared.runningApplications
+    let front = Background.frontmostApplication()?.processIdentifier
+    return NSWorkspace.shared.runningApplications
       .filter { $0.activationPolicy == .regular }
       .compactMap { app -> [String: Any]? in
         guard let bundleId = app.bundleIdentifier, let name = app.localizedName else { return nil }
@@ -26,7 +27,7 @@ enum Apps {
           "bundleId": bundleId,
           "name": name,
           "pid": Int(app.processIdentifier),
-          "frontmost": app.isActive,
+          "frontmost": app.processIdentifier == front,
           "automation": isAutomationInstance(app),
         ]
       }
@@ -76,7 +77,8 @@ enum Apps {
   private static func describe(_ app: NSRunningApplication, alreadyRunning: Bool) -> [String: Any] {
     [
       "found": true, "alreadyRunning": alreadyRunning, "pid": Int(app.processIdentifier),
-      "bundleId": app.bundleIdentifier ?? "", "name": app.localizedName ?? "", "frontmost": app.isActive,
+      "bundleId": app.bundleIdentifier ?? "", "name": app.localizedName ?? "",
+      "frontmost": app.processIdentifier == Background.frontmostApplication()?.processIdentifier,
     ]
   }
 
@@ -103,7 +105,7 @@ enum Apps {
     if let bundleId {
       return personInstance(among: NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId })
     }
-    return NSWorkspace.shared.frontmostApplication
+    return Background.frontmostApplication()
   }
 
   /// Among running copies of one app, the one the person uses. A browser automation layer (this extension's managed

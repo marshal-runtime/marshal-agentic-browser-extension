@@ -9,7 +9,15 @@ enum Background {
   private static func source() -> CGEventSource? { CGEventSource(stateID: .privateState) }
 
   static func frontmostBundleId() -> String {
-    NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+    frontmostApplication()?.bundleIdentifier ?? ""
+  }
+
+  /// The front app as it is now. NSWorkspace updates its answer from notifications delivered on the run loop, and this
+  /// helper's main thread sits in readLine, so without draining the run loop first a long-lived helper kept reporting
+  /// an app that was no longer in front (48 of 108 samples wrong against `lsappinfo front`, live 2026-11-24).
+  static func frontmostApplication() -> NSRunningApplication? {
+    RunLoop.current.run(mode: .default, before: Date())
+    return NSWorkspace.shared.frontmostApplication
   }
 
   /// After an action, watches briefly whether the target app came to the front. It is only reported (a bug to fix in
@@ -17,11 +25,22 @@ enum Background {
   static func targetCameForward(target: pid_t) -> Bool {
     var waited = 0
     while waited < 300 {
-      if NSWorkspace.shared.frontmostApplication?.processIdentifier == target { return true }
+      if frontmostApplication()?.processIdentifier == target { return true }
       Thread.sleep(forTimeInterval: 0.1)
       waited += 100
     }
     return false
+  }
+
+  /// Cmd+T, Cmd+N and Cmd+Shift+N: the shortcuts that open a new tab or window.
+  static func opensWindow(name: String, modifiers: [String]) -> Bool {
+    let flags = Actions.flags(for: modifiers)
+    guard flags.contains(.maskCommand), !flags.contains(.maskAlternate), !flags.contains(.maskControl) else { return false }
+    switch name.lowercased() {
+    case "t": return !flags.contains(.maskShift)
+    case "n": return true
+    default: return false
+    }
   }
 
   @discardableResult

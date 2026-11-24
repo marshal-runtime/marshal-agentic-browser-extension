@@ -243,14 +243,14 @@ func outcomeResponse(_ id: Any?, _ outcome: Actions.Outcome, failure: String) ->
 
 /// Ops that act on the target app. In background mode an action must never bring the target forward; if the target
 /// came to the front anyway, the response says so (targetCameForward) so the caller treats it as a bug.
-let actingOps: Set<String> = ["press", "confirm", "clickAt", "keys"]
+let actingOps: Set<String> = ["press", "setValue", "confirm", "clickAt", "keys"]
 
 func handleRequest(_ request: [String: Any]) -> [String: Any] {
   let op = request["op"] as? String ?? ""
   guard actingOps.contains(op), let pid = request["pid"] as? Int, request["allowForeground"] as? Bool != true else {
     return dispatch(request)
   }
-  let before = NSWorkspace.shared.frontmostApplication
+  let before = Background.frontmostApplication()
   var response = dispatch(request)
   guard let before, before.processIdentifier != pid_t(pid) else { return response }
   if Background.targetCameForward(target: pid_t(pid)) { response["targetCameForward"] = true }
@@ -326,6 +326,15 @@ func dispatch(_ request: [String: Any]) -> [String: Any] {
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
     guard let keys = request["keys"] as? [[String: Any]], !keys.isEmpty else { return errorResponse(id, "missing \"keys\"") }
+    // New-tab / new-window shortcuts make the app open a window and activate itself (Cmd+T posted to Chrome brought it
+    // to the front about 0.2 s later, measured with lsappinfo 2026-11-24): never sent in the background.
+    if !allowForeground,
+      let index = keys.firstIndex(where: { Background.opensWindow(name: $0["name"] as? String ?? "", modifiers: $0["modifiers"] as? [String] ?? []) })
+    {
+      var out = errorResponse(id, "keys[\(index)] opens a tab or window, which brings the app to the front: it needs allowForeground")
+      out["needsForeground"] = true
+      return out
+    }
     let before = Background.frontmostBundleId()
     for (index, entry) in keys.enumerated() {
       let name = entry["name"] as? String ?? ""
