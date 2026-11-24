@@ -59,6 +59,11 @@ describe('existingInstall', () => {
     expect(
       existingInstall('/p', ID, FOLDER, prefs({ path: `${ID}/0.4.0_0`, location: 1 })),
     ).toMatchObject({ present: true, fromCarriedFolder: false });
+    // The empty entry Chrome keeps under a removed extension's id is not an install.
+    expect(existingInstall('/p', ID, FOLDER, prefs({}))).toEqual({
+      present: false,
+      fromCarriedFolder: false,
+    });
     expect(existingInstall('/p', ID, FOLDER, () => undefined)).toEqual({
       present: false,
       fromCarriedFolder: false,
@@ -100,6 +105,8 @@ function fakeChrome(
     otherCopy?: boolean;
     panelOpensAt?: string;
     connects?: boolean;
+    /** Nothing in Chrome has focus: a Return posted to the pid reaches no field, only confirm (focus + Return) does. */
+    nothingFocused?: boolean;
     frontmost?: () => string;
   } = {},
 ): { state: FakeState; deps: InstallDeps } {
@@ -179,10 +186,17 @@ function fakeChrome(
       case 'keys': {
         const key = (request['keys'] as { name: string; modifiers?: string[] }[])[0];
         state.keys.push([...(key?.modifiers ?? []), key?.name ?? ''].join('+'));
-        if (key?.name === 'return' && state.typed.startsWith('chrome://extensions'))
+        if (
+          key?.name === 'return' &&
+          !options.nothingFocused &&
+          state.typed.startsWith('chrome://extensions')
+        )
           state.page = true;
         return { ok: true };
       }
+      case 'confirm':
+        if (state.typed.startsWith('chrome://extensions')) state.page = true;
+        return { ok: true };
       case 'setValue':
         state.typed = String(request['text']);
         return { ok: true };
@@ -403,6 +417,15 @@ describe('installChromeExtension', () => {
     expect((await installChromeExtension({ folder: null }, {}, deps)).reason).toBe(
       'no_carried_folder',
     );
+  });
+
+  it('falls back to confirm on the address bar when the posted Return reaches no field', async () => {
+    const { state, deps } = fakeChrome({ nothingFocused: true });
+    const result = await installChromeExtension(carried, {}, deps);
+    expect(result.status).toBe('installed');
+    expect(result.steps[1]?.detail).toContain('attempt 2');
+    expect(state.calls).toContain('confirm');
+    expect(state.wentBack).toBe(true);
   });
 
   it('waits only, when the carried folder is already loaded and connects', async () => {

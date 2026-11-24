@@ -186,6 +186,8 @@ export function existingInstall(
       if (!entry) continue;
       const entryPath = typeof entry.path === 'string' ? entry.path : undefined;
       const location = typeof entry.location === 'number' ? entry.location : undefined;
+      // Chrome leaves an empty {} under a removed extension's id (Omer's Profile 1 has one): not an install.
+      if (entryPath === undefined && location === undefined) continue;
       return {
         present: true,
         fromCarriedFolder:
@@ -439,7 +441,8 @@ export async function installChromeExtension(
     await step('navigate the front tab to chrome://extensions', async () => {
       const bar = await poll(10_000, windowAddressBar);
       if (!bar) throw new Stop('no_window', 'Chrome has no window with an address bar.');
-      if (bar.value.startsWith('chrome://extensions'))
+      // A bar still holding the typed address (exactly EXTENSIONS_URL) was never committed: not already there.
+      if (bar.value.startsWith('chrome://extensions') && bar.value !== EXTENSIONS_URL)
         return { value: undefined, detail: 'already on chrome://extensions' };
       // The value alone, no AXFocused write and no Cmd+L: Chrome's omnibox takes it and a Return posted to the pid
       // navigates the tab with Chrome left in the background. AXConfirm answers success and does nothing here.
@@ -453,6 +456,9 @@ export async function installChromeExtension(
           ? true
           : undefined;
       };
+      // When nothing in Chrome has focus (a New Tab window another app left behind, live on Omer's Chrome
+      // 2026-11-24), the posted Return reaches no field: then the helper's confirm focuses the bar and posts Return
+      // to the pid, still in the background (lsappinfo every 100 ms showed Chrome never in front).
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const current = (await windowAddressBar()) ?? bar;
         await call({
@@ -467,7 +473,14 @@ export async function installChromeExtension(
         });
         if (!set) continue;
         await deps.sleep(300);
-        await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
+        if (attempt === 1) await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
+        else
+          await call({
+            op: 'confirm',
+            pid: chromePid,
+            nodeId: current.nodeId,
+            allowRealInput: true,
+          });
         cleanup.navigated = true;
         if (await poll(3_000, committed)) {
           const from = bar.value ? `from ${bar.value}` : 'from an empty tab';
