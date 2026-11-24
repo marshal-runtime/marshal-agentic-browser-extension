@@ -12,6 +12,24 @@ enum Background {
     NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
   }
 
+  /// After an action, watches briefly whether the target app made itself frontmost; if it did, the app that was in
+  /// front before is brought back. Returns true when it had to.
+  static func restoreFront(previous: NSRunningApplication, target: pid_t) -> Bool {
+    var waited = 0
+    while waited < 400 {
+      if NSWorkspace.shared.frontmostApplication?.processIdentifier == target {
+        _ = previous.activate(options: [])
+        Thread.sleep(forTimeInterval: 0.1)
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != target { return true }
+        _ = previous.activate(options: [.activateAllWindows])
+        return true
+      }
+      Thread.sleep(forTimeInterval: 0.1)
+      waited += 100
+    }
+    return false
+  }
+
   @discardableResult
   static func key(pid: pid_t, name: String, modifiers: [String]) -> Bool {
     guard let code = Actions.keyCode(for: name) else { return false }

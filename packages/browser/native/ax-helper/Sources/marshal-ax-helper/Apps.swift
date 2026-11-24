@@ -120,6 +120,21 @@ enum Apps {
     return people.first { onScreen.contains(Int($0.processIdentifier)) } ?? people.first
   }
 
+  /// Chromium-based by the framework its bundle ships: Electron apps carry "Electron Framework.framework"; Chrome,
+  /// Edge, Brave and Arc carry "<name> Framework.framework" with Chromium's helper apps in its Helpers folder.
+  static func isChromiumBased(_ app: NSRunningApplication) -> Bool {
+    guard let bundle = app.bundleURL else { return false }
+    let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks.path)) ?? []
+    return names.contains { name in
+      if name == "Electron Framework.framework" { return true }
+      guard name.hasSuffix(" Framework.framework") else { return false }
+      let framework = frameworks.appendingPathComponent(name)
+      return FileManager.default.fileExists(atPath: framework.appendingPathComponent("Helpers").path)
+        || FileManager.default.fileExists(atPath: framework.appendingPathComponent("Versions/Current/Helpers").path)
+    }
+  }
+
   static func isAutomationInstance(_ app: NSRunningApplication) -> Bool {
     if app.activationPolicy == .prohibited { return true }
     return isAutomationCommandLine(processArguments(pid: app.processIdentifier))

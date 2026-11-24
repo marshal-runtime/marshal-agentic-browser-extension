@@ -36,7 +36,14 @@ enum Actions {
   }
 
   static func press(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
-    if AXAttr.perform(element, action: kAXPressAction as String) { return Outcome(ok: true) }
+    let pressed = AXUIElementPerformAction(element, kAXPressAction as CFString)
+    if pressed == .success { return Outcome(ok: true) }
+    // The press was delivered but the app did not answer within the messaging timeout: a press that opens a modal
+    // (a confirm sheet, an open panel) blocks the app's reply until the modal closes. Pressing again, or falling back
+    // to a click, would act twice.
+    if pressed == .cannotComplete {
+      return Outcome(ok: true, detail: "the app is busy after the press (it may have opened a dialog)")
+    }
     // Rows, cells and tabs often take selection instead of AXPress.
     if AXAttr.isSettable(element, kAXSelectedAttribute as String),
       AXAttr.set(element, kAXSelectedAttribute as String, kCFBooleanTrue)
