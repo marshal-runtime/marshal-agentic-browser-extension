@@ -32,12 +32,14 @@ enum Background {
     return false
   }
 
-  /// Cmd+T, Cmd+N and Cmd+Shift+N: the shortcuts that open a new tab or window.
-  static func opensWindow(name: String, modifiers: [String]) -> Bool {
+  /// Shortcuts measured to bring the app to the front when posted to it in the background (lsappinfo sampled every
+  /// 100 ms, 2026-11-24): Cmd+T and Cmd+L in Chrome (new tab; focus the address bar), plus Cmd+N / Cmd+Shift+N, which
+  /// open a window the same way Cmd+T does. Set the address bar's value through Accessibility instead of Cmd+L.
+  static func raisesApp(name: String, modifiers: [String]) -> Bool {
     let flags = Actions.flags(for: modifiers)
     guard flags.contains(.maskCommand), !flags.contains(.maskAlternate), !flags.contains(.maskControl) else { return false }
     switch name.lowercased() {
-    case "t": return !flags.contains(.maskShift)
+    case "t", "l": return !flags.contains(.maskShift)
     case "n": return true
     default: return false
     }
