@@ -74,8 +74,9 @@ interface FakeState {
   dialog: boolean;
   panel: boolean;
   panelDefault: string;
-  tabClosed: boolean;
+  wentBack: boolean;
   typed: string;
+  keys: string[];
   calls: string[];
 }
 
@@ -110,8 +111,9 @@ function fakeChrome(
     dialog: false,
     panel: false,
     panelDefault: 'ORIGINAL',
-    tabClosed: false,
+    wentBack: false,
     typed: '',
+    keys: [],
     calls: [],
   };
   const nodes = new Map<string, () => void>();
@@ -175,12 +177,13 @@ function fakeChrome(
           ],
         };
       case 'keys': {
-        const key = (request['keys'] as { name: string }[])[0]?.name;
-        if (key === 'return') state.page = true;
-        if (key === 'w') state.tabClosed = true;
+        const key = (request['keys'] as { name: string; modifiers?: string[] }[])[0];
+        state.keys.push([...(key?.modifiers ?? []), key?.name ?? ''].join('+'));
+        if (key?.name === 'return' && state.typed.startsWith('chrome://extensions'))
+          state.page = true;
         return { ok: true };
       }
-      case 'typeText':
+      case 'setValue':
         state.typed = String(request['text']);
         return { ok: true };
       case 'read':
@@ -198,10 +201,21 @@ function fakeChrome(
         if (first.description === 'Address and search bar') {
           const bar = node({
             role: 'AXTextField',
-            value: state.page && !state.tabClosed ? 'chrome://extensions' : '',
+            value: state.page && !state.wentBack ? 'chrome://extensions' : 'https://example.com/',
           });
           readers.set(bar.nodeId, () => state.typed);
-          return { ok: true, matches: [bar] };
+          const back =
+            queries[1]?.title === 'Back'
+              ? [
+                  {
+                    ...node({ role: 'AXButton', title: 'Back' }, () => {
+                      state.wentBack = true;
+                    }),
+                    query: 1,
+                  },
+                ]
+              : [];
+          return { ok: true, matches: [bar, ...back] };
         }
         if (first.role === 'AXWebArea')
           return { ok: true, matches: state.page ? [node({ role: 'AXWebArea' })] : [] };
@@ -310,7 +324,7 @@ describe('installChromeExtension', () => {
     });
     expect(result.steps.map((step) => step.step)).toEqual([
       'find Chrome',
-      'open a background tab',
+      'navigate the front tab to chrome://extensions',
       'load chrome://extensions',
       'Developer mode',
       'open Load unpacked at the carried folder',
@@ -325,10 +339,11 @@ describe('installChromeExtension', () => {
       ),
     ).toBe(true);
     expect(state.panelDefault).toBe('ORIGINAL');
-    expect(state.tabClosed).toBe(true);
+    expect(state.wentBack).toBe(true);
+    expect(state.keys).toEqual(['return']);
     expect(state.calls).not.toContain('focus');
     expect(state.calls).not.toContain('clickAt');
-    expect(state.calls).not.toContain('setValue');
+    expect(state.calls).not.toContain('typeText');
   });
 
   it('removes another copy with the same id first, and never another extension', async () => {
@@ -348,7 +363,7 @@ describe('installChromeExtension', () => {
       status: 'stopped',
       reason: 'developer_mode_blocked',
     });
-    expect(state.tabClosed).toBe(true);
+    expect(state.wentBack).toBe(true);
   });
 
   it('cancels the panel when it opens somewhere else, and puts the panel default back', async () => {

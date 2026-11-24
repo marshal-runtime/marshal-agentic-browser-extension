@@ -7,7 +7,9 @@
  * posted to Chrome's pid (the helper's keys op), never real input:
  *   1. find the person's Chrome: the regular instance, never a headless copy or one this package started for its
  *      agent/visitor profiles; start it with `open -g -n` when none runs;
- *   2. open chrome://extensions in a new tab of it (Cmd+T, address bar value, Return);
+ *   2. navigate the front tab to chrome://extensions (the address bar's AXValue, then Return posted to the pid). A new
+ *      tab is never opened: Cmd+T, the New Tab button, Window > Extensions and Option+Return all made Chrome activate
+ *      itself (lsappinfo every 100 ms, 2026-11-24), the value write plus Return did not;
  *   3. turn Developer mode on (a managed policy that blocks it stops here);
  *   4. remove a copy with the carried id that was not loaded from the carried folder (the Marley website's zip), and
  *      confirm Chrome's dialog;
@@ -16,7 +18,7 @@
  *      beforehand through the shared panel default `NSOSPLastRootDirectory` of com.google.Chrome, checked by its
  *      "Where:" value, and Select is pressed; the previous default is put back;
  *   6. wait until the extension connects to the bridge (the folder carries marshal-bridge.json with the address, so
- *      there is no popup step), then close the tab.
+ *      there is no popup step), then press the toolbar's Back button so the person's page comes back.
  * Every step records the frontmost app before and after; the result says whether Chrome ever came to the front.
  */
 import { execFile } from 'node:child_process';
@@ -119,6 +121,7 @@ const CHROME_BUNDLE = 'com.google.Chrome';
 const PANEL_DEFAULT = 'NSOSPLastRootDirectory';
 const UNPACKED_LOCATION = 4;
 const SKIP_WEB = ['AXWebArea'];
+const EXTENSIONS_URL = 'chrome://extensions/';
 /** The open panel's file browser and sidebar hold every file of the folder: never walked. */
 const SKIP_PANEL_LISTS = ['AXBrowser', 'AXOutline', 'AXScrollArea', 'AXWebArea'];
 
@@ -351,7 +354,7 @@ export async function installChromeExtension(
     );
 
   // Set inside the steps' closures, read in finally.
-  const cleanup: { restorePanel?: string; tabOpened: boolean } = { tabOpened: false };
+  const cleanup: { restorePanel?: string; navigated: boolean } = { navigated: false };
   try {
     const appPath = input.appPath ?? CHROME_APP;
     const found = await step('find Chrome', async () => {
@@ -403,7 +406,7 @@ export async function installChromeExtension(
         ok: true,
         detail: existing?.fromCarriedFolder
           ? 'The carried folder is already loaded: only wait for it to connect.'
-          : `Would open chrome://extensions in a background tab, turn on Developer mode, ${existing?.present ? `remove the copy with the same id at ${existing.path ?? 'another location'}, ` : ''}Load unpacked ${folder}, and wait for it to connect.`,
+          : `Would navigate Chrome's front tab to chrome://extensions in the background, turn on Developer mode, ${existing?.present ? `remove the copy with the same id at ${existing.path ?? 'another location'}, ` : ''}Load unpacked ${folder}, wait for it to connect, and go Back to the page that was open.`,
         frontmostBefore: '',
         frontmostAfter: '',
         ms: 0,
@@ -433,47 +436,52 @@ export async function installChromeExtension(
         })
       )[0];
 
-    const tabCount = async (): Promise<number> =>
-      (
-        await find({
-          queries: [{ role: 'AXRadioButton', subrole: 'AXTabButton' }],
-          skipRoles: SKIP_WEB,
-          maxDepth: 12,
-        })
-      ).length;
-
-    await step('open a background tab', async () => {
-      if (!(await poll(10_000, windowAddressBar)))
-        throw new Stop('no_window', 'Chrome has no window with an address bar.');
-      const tabsBefore = await tabCount();
-      await call({ op: 'keys', pid: chromePid, keys: [{ name: 't', modifiers: ['cmd'] }] });
-      cleanup.tabOpened = true;
-      // Keys sent before the new tab is ready are lost: wait for it, then let its address bar settle.
-      await poll(5_000, async () => ((await tabCount()) > tabsBefore ? true : undefined));
-      await deps.sleep(400);
-      // Keys posted to Chrome's pid, never an AXFocused write (focusing a field can bring its app forward).
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const bar = await windowAddressBar();
-        if (!bar) throw new Stop('no_window', 'Chrome has no window with an address bar.');
-        await call({ op: 'keys', pid: chromePid, keys: [{ name: 'l', modifiers: ['cmd'] }] });
-        await call({ op: 'typeText', pid: chromePid, text: 'chrome://extensions/' });
-        const typed = await poll(1_500, async () => {
-          const read = await call({ op: 'read', nodeId: bar.nodeId });
+    await step('navigate the front tab to chrome://extensions', async () => {
+      const bar = await poll(10_000, windowAddressBar);
+      if (!bar) throw new Stop('no_window', 'Chrome has no window with an address bar.');
+      if (bar.value.startsWith('chrome://extensions'))
+        return { value: undefined, detail: 'already on chrome://extensions' };
+      // The value alone, no AXFocused write and no Cmd+L: Chrome's omnibox takes it and a Return posted to the pid
+      // navigates the tab with Chrome left in the background. AXConfirm answers success and does nothing here.
+      // A Return sent the moment the value applied was lost once in a just-started Chrome: settle, check, retry.
+      // Committed is when the bar shows the address as Chrome displays a loaded one (no trailing slash); the page's
+      // web tree can take seconds longer in a window that was never shown, so it is not waited for here (a retry's
+      // Return would reload the page that is still building).
+      const committed = async (): Promise<true | undefined> => {
+        const now = await windowAddressBar();
+        return now?.value.startsWith('chrome://extensions') && now.value !== EXTENSIONS_URL
+          ? true
+          : undefined;
+      };
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const current = (await windowAddressBar()) ?? bar;
+        await call({
+          op: 'setValue',
+          pid: chromePid,
+          nodeId: current.nodeId,
+          text: EXTENSIONS_URL,
+        });
+        const set = await poll(1_500, async () => {
+          const read = await call({ op: 'read', nodeId: current.nodeId });
           return String(read['value']).startsWith('chrome://extensions') ? true : undefined;
         });
-        if (typed) {
-          await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
+        if (!set) continue;
+        await deps.sleep(300);
+        await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
+        cleanup.navigated = true;
+        if (await poll(3_000, committed)) {
+          const from = bar.value ? `from ${bar.value}` : 'from an empty tab';
           return {
             value: undefined,
-            detail: attempt ? `typed on attempt ${String(attempt + 1)}` : undefined,
+            detail: attempt > 1 ? `${from}, attempt ${String(attempt)}` : from,
           };
         }
       }
-      throw new Stop('no_window', 'The address bar did not take the typed address.');
+      throw new Stop('page_did_not_load', 'The address bar did not take chrome://extensions.');
     });
 
     const page = await step('load chrome://extensions', async () => {
-      const area = await poll(15_000, async () => {
+      const area = await poll(30_000, async () => {
         const areas = await find({
           queries: [{ role: 'AXWebArea', title: 'Extensions' }],
           skipRoles: SKIP_WEB,
@@ -490,7 +498,10 @@ export async function installChromeExtension(
         return ready[0] ? areas[0] : undefined;
       });
       if (!area)
-        throw new Stop('page_did_not_load', 'chrome://extensions did not load in the new tab.');
+        throw new Stop(
+          'page_did_not_load',
+          "chrome://extensions did not load in Chrome's front tab.",
+        );
       return { value: area };
     });
 
@@ -661,24 +672,31 @@ export async function installChromeExtension(
   } finally {
     if (cleanup.restorePanel !== undefined)
       await deps.panelDefault('restore', cleanup.restorePanel).catch(() => '');
-    if (cleanup.tabOpened && chromePid > 0)
-      await closeExtensionsTab(deps, chromePid).catch(() => undefined);
+    if (cleanup.navigated && chromePid > 0) await goBack(deps, chromePid).catch(() => undefined);
   }
 }
 
-/** Closes the tab this run opened, only while the front tab of Chrome's first window is still chrome://extensions. */
-async function closeExtensionsTab(deps: InstallDeps, pid: number): Promise<void> {
+/**
+ * Presses the toolbar's Back button (AXPress, Chrome stays in the background), only while the front tab is still on
+ * chrome://extensions: the person's page comes back. Cmd+W is not used, it would close their tab.
+ */
+async function goBack(deps: InstallDeps, pid: number): Promise<void> {
   const response = await deps.helper({
     op: 'find',
     pid,
-    queries: [{ role: 'AXTextField', description: 'Address and search bar' }],
+    queries: [
+      { role: 'AXTextField', description: 'Address and search bar' },
+      { role: 'AXButton', title: 'Back' },
+    ],
     skipRoles: SKIP_WEB,
     maxDepth: 14,
-    limit: 1,
+    limit: 4,
   });
-  const bar = (response['matches'] as Match[] | undefined)?.[0];
-  if (bar?.value.startsWith('chrome://extensions'))
-    await deps.helper({ op: 'keys', pid, keys: [{ name: 'w', modifiers: ['cmd'] }] });
+  const matches = (response['matches'] as Match[] | undefined) ?? [];
+  const bar = matches.find((match) => match.query === 0);
+  const back = matches.find((match) => match.query === 1);
+  if (bar?.value.startsWith('chrome://extensions') && back)
+    await deps.helper({ op: 'press', pid, nodeId: back.nodeId });
 }
 
 // ---------- real dependencies ----------
