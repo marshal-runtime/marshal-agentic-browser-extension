@@ -24,10 +24,20 @@ const APP_INPUTS = {
     description:
       'With on:"app": the app, by bundle id (com.apple.TextEdit) or name (TextEdit). Started in the background when not running, and quit afterwards.',
   },
+  pid: {
+    type: 'integer',
+    description:
+      'With on:"app": one running copy of the app by process id (when several run, e.g. a test Chrome beside the person\'s). Without it a copy started by automation (headless, a Marshal browser profile) is never picked.',
+  },
   allowRealInput: {
     type: 'boolean',
     description:
-      'With on:"app": may a step bring the app to the front or use real keyboard/mouse input when Accessibility alone cannot do it? Default false: such a step stops with needs_input (real_input_required).',
+      'With on:"app": may a step send real keyboard/mouse events when Accessibility alone cannot do it? They go to the app in the background: it stays behind, the pointer does not move, and the person keeps working. Default false: such a step stops with needs_input (real_input_required).',
+  },
+  allowForeground: {
+    type: 'boolean',
+    description:
+      'With on:"app": may a step also bring the app to the front (taking the person\'s screen) when background input did not work? Default false.',
   },
   launch: {
     type: 'boolean',

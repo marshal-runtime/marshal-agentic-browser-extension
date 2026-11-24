@@ -36,7 +36,14 @@ enum Actions {
   }
 
   static func press(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
-    if AXAttr.perform(element, action: kAXPressAction as String) { return Outcome(ok: true) }
+    let pressed = AXUIElementPerformAction(element, kAXPressAction as CFString)
+    if pressed == .success { return Outcome(ok: true) }
+    // The press was delivered but the app did not answer within the messaging timeout: a press that opens a modal
+    // (a confirm sheet, an open panel) blocks the app's reply until the modal closes. Pressing again, or falling back
+    // to a click, would act twice.
+    if pressed == .cannotComplete {
+      return Outcome(ok: true, detail: "the app is busy after the press (it may have opened a dialog)")
+    }
     // Rows, cells and tabs often take selection instead of AXPress.
     if AXAttr.isSettable(element, kAXSelectedAttribute as String),
       AXAttr.set(element, kAXSelectedAttribute as String, kCFBooleanTrue)
@@ -70,8 +77,13 @@ enum Actions {
     AXAttr.perform(element, action: "AXFocus")
     _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
     if AXAttr.set(element, kAXValueAttribute as String, text as CFTypeRef) {
-      // Some fields accept the call and ignore it: read the value back.
-      if AXAttr.string(element, kAXValueAttribute as String) == text { return Outcome(ok: true) }
+      // Some fields accept the call and ignore it: read the value back. Chromium applies it a moment later, so the
+      // read-back waits briefly before falling through to typing (typing over an applied value doubled it, live
+      // 2026-11-24).
+      for attempt in 0..<6 {
+        if AXAttr.string(element, kAXValueAttribute as String) == text { return Outcome(ok: true) }
+        if attempt < 5 { Thread.sleep(forTimeInterval: 0.05) }
+      }
     }
     guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "the field does not take a value through Accessibility")
@@ -97,6 +109,20 @@ enum Actions {
   /// "Press Enter" in a field: AXConfirm, else a Return key posted to the app in the background, else (foreground
   /// opt-in only) a real Return with the app in front.
   static func confirm(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
+    // A web page's field answers AXConfirm with success and does nothing (Chromium, live 2026-11-24): there Enter is
+    // only ever a key, so the field is focused and Return goes to the app in the background.
+    if isInWebArea(element) {
+      guard policy.background || policy.foreground else {
+        return Outcome(ok: false, needsRealInput: true, detail: "Enter in a web page field needs a real Return key")
+      }
+      _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
+      Thread.sleep(forTimeInterval: 0.05)
+      if policy.background {
+        return Outcome(ok: Background.key(pid: pid, name: "return", modifiers: []), realInput: true)
+      }
+      activate(pid: pid)
+      return Outcome(ok: key(name: "return", modifiers: []), realInput: true)
+    }
     if AXAttr.perform(element, action: "AXConfirm") { return Outcome(ok: true) }
     guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "the field has no AXConfirm action")
@@ -126,11 +152,29 @@ enum Actions {
     }
     guard let frame = AXAttr.frame(window) else { return Outcome(ok: false, detail: "no window frame") }
     let centre = CGPoint(x: frame.midX, y: frame.midY)
+    // Chromium drops wheel events posted to it while it is behind other apps, but takes Page Down / Page Up.
+    if policy.background, Snapshot.containsWebArea(window) {
+      return Outcome(ok: Background.key(pid: pid, name: down ? "pagedown" : "pageup", modifiers: []), realInput: true)
+    }
     if policy.background {
       return Outcome(ok: Background.wheel(pid: pid, at: centre, dy: down ? -560 : 560), realInput: true)
     }
     activate(pid: pid)
     return Outcome(ok: wheel(at: centre, dy: down ? -560 : 560), realInput: true)
+  }
+
+  /// True when the element sits inside a web page (an AXWebArea ancestor).
+  static func isInWebArea(_ element: AXUIElement) -> Bool {
+    var current = AXAttr.element(element, kAXParentAttribute as String)
+    var depth = 0
+    while let node = current, depth < 60 {
+      let role = AXAttr.role(node)
+      if role == "AXWebArea" { return true }
+      if role == "AXWindow" || role == "AXApplication" { return false }
+      current = AXAttr.element(node, kAXParentAttribute as String)
+      depth += 1
+    }
+    return false
   }
 
   /// Brings the app to the front: only ever called on a foreground path the caller opted into.

@@ -132,6 +132,26 @@ func handleSnapshot(_ request: [String: Any]) -> [String: Any] {
     }
   }
 
+  // Chromium fills a web page's tree lazily: on the first read of a fresh window the page is an empty AXWebArea while
+  // the browser's own toolbar already counts as plenty of elements, so the wait above never ran (live 2026-11-24).
+  // A Chromium-based app (Chrome, Edge, Electron) shows no web area at all until its tree is built, a few seconds
+  // after the first Accessibility read, so its first snapshot waits for one.
+  func pageMissing() -> Bool {
+    current.0.webAreas.isEmpty
+      ? isFirstSnapshot && Apps.isChromiumBased(app)
+      : current.0.webAreas.allSatisfy({ AXAttr.children($0).isEmpty })
+  }
+  if pageMissing() {
+    for webArea in current.0.webAreas { setManualAccessibility(webArea, label: "empty webArea", pid: resolvedPid) }
+    var elapsedMs = 0
+    while elapsedMs < 4_000, pageMissing() {
+      Thread.sleep(forTimeInterval: 0.2)
+      elapsedMs += 200
+      if let polled = walkOnce(appElement) { current = polled }
+    }
+    log("pid=\(resolvedPid) empty web area wait \(elapsedMs)ms")
+  }
+
   let (result, win) = current
   let text = Snapshot.visibleText(result.textParts)
   let focused = Snapshot.focusedField(appElement: appElement)
@@ -211,13 +231,33 @@ func region(of frame: CGRect, in windowFrame: CGRect) -> String {
 }
 
 func outcomeResponse(_ id: Any?, _ outcome: Actions.Outcome, failure: String) -> [String: Any] {
-  if outcome.ok { return okResponse(id, ["realInput": outcome.realInput]) }
+  if outcome.ok {
+    var payload: [String: Any] = ["realInput": outcome.realInput]
+    if let detail = outcome.detail { payload["detail"] = detail }
+    return okResponse(id, payload)
+  }
   var out = errorResponse(id, outcome.detail ?? failure)
   if outcome.needsRealInput { out["needsRealInput"] = true }
   return out
 }
 
+/// Ops that act on the target app. In background mode an action must never bring the target forward; if the target
+/// came to the front anyway, the response says so (targetCameForward) so the caller treats it as a bug.
+let actingOps: Set<String> = ["press", "confirm", "clickAt", "keys"]
+
 func handleRequest(_ request: [String: Any]) -> [String: Any] {
+  let op = request["op"] as? String ?? ""
+  guard actingOps.contains(op), let pid = request["pid"] as? Int, request["allowForeground"] as? Bool != true else {
+    return dispatch(request)
+  }
+  let before = NSWorkspace.shared.frontmostApplication
+  var response = dispatch(request)
+  guard let before, before.processIdentifier != pid_t(pid) else { return response }
+  if Background.targetCameForward(target: pid_t(pid)) { response["targetCameForward"] = true }
+  return response
+}
+
+func dispatch(_ request: [String: Any]) -> [String: Any] {
   let id = request["id"]
   guard let op = request["op"] as? String else {
     return errorResponse(id, "missing \"op\"")
@@ -366,6 +406,9 @@ if CommandLine.arguments.contains("--selftest") {
   exit(0)
 }
 
+// A bounded wait for any app's Accessibility answer (the default is about 6 s per call, and a press behind a modal
+// was seen to block 60 s+). Set on the system-wide element, it applies to every element this helper reads.
+AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 4.0)
 log("marshal-ax-helper started, pid=\(ProcessInfo.processInfo.processIdentifier)")
 while let line = readLine(strippingNewline: true) {
   guard !line.isEmpty else { continue }

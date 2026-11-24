@@ -254,10 +254,18 @@ bundle loads no image library); every decision carries it, as on the managed bac
 
 - An app that is not running is opened in the background (never activated) and quit when the task or session ends; an
   app that was already running is driven but never quit. `launch: false` stops with `app_not_running` instead.
-- Actions are Accessibility only: AXPress (or selection), setting a field's value, AXConfirm for `submit`, paging the
+- When several copies of an app run, a copy started by automation (headless, a debugging pipe or port, a profile under
+  `~/.marshal/browser` or a temporary `marshal-browser-*` folder) is never picked by name, so `app: "Google Chrome"`
+  reaches the person's Chrome. `pid` picks one copy exactly (a test drives its own Chrome this way).
+- Actions are Accessibility first: AXPress (or selection), setting a field's value, AXConfirm for `submit`, paging the
   scroll bar. None moves the pointer or brings the app to the front, and menus (which open on screen) are not read. A
   step that only real keyboard/mouse input could do stops with `needs_input` / `real_input_required`, unless the caller
-  sets `allowRealInput: true`; then it may activate the app and click or type for real, and the trace says so.
+  sets `allowRealInput: true`; then the click, keys, text or scroll are posted to the app in the background
+  (`CGEvent.postToPid` from a private event source): the app stays behind, the pointer does not move, the person keeps
+  working in their own app, and the trace says real input was used. A typed value is read back; only when background
+  typing did not land and the caller also set `allowForeground: true` is the app brought to the front for it.
+- The helper's `keys` (`{op:'keys', pid, keys:[{name, modifiers?}]}`) and `typeText` (`{op:'typeText', pid, text}`)
+  ops post keys or text to one app in the background and answer the frontmost app before and after.
 - Password fields (AXSecureTextField) are never offered and their value is never read. Typed text comes only from
   `values`.
 - A control stops with `needs_owner` on a typed Accessibility signal, never on its label: window controls

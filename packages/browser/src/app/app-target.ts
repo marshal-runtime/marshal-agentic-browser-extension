@@ -2,10 +2,12 @@
  * The `app` backend: one running macOS app behind the same `Target` the managed Chrome uses. Lifted from
  * automation-extension's AxAdapter/HybridAdapter (src/native), reshaped to the shared `Snapshot` (eN refs) and with
  * these rules, all enforced here or in the Swift helper (native/ax-helper), never by the model:
- *   - Accessibility actions only (AXPress, AX value set, AXConfirm, scroll-bar paging): they move no pointer and leave
- *     the app where it is. A step that only real keyboard/mouse input or bringing the app to the front could do
- *     returns `needsRealInput`, which the engine turns into a typed `needs_input` stop, unless the caller set
- *     `allowRealInput`; then the outcome says `realInput` and the trace records it.
+ *   - Accessibility actions first (AXPress, AX value set, AXConfirm, scroll-bar paging): they move no pointer and leave
+ *     the app where it is. A step that only real keyboard/mouse input could do returns `needsRealInput`, which the
+ *     engine turns into a typed `needs_input` stop, unless the caller set `allowRealInput`; then the helper posts the
+ *     events to the app in the background (CGEvent.postToPid: the app stays behind, the pointer stays put, the person
+ *     keeps working) and the outcome says `realInput`. Bringing the app to the front is a separate opt-in,
+ *     `allowForeground`, used only for a typed value that background typing did not land.
  *   - A password field (AXSecureTextField) is marked `secret` and its value is never read, so the engine never
  *     offers it; `act` also refuses it directly (browser.session.act reaches here without the engine).
  *   - `ownerSignal` comes from typed AX facts only (window-control subroles, a sheet's or dialog's default button).
@@ -63,8 +65,13 @@ export interface AppTargetOptions {
   /** Optional OCR reader; used only when AX labels fewer than `ocrBelow` on-screen elements. */
   readonly ocr?: OcrCaller;
   readonly ocrBelow?: number;
-  /** May the backend bring the app to the front and send real keyboard/mouse input? Default false. */
+  /**
+   * May the backend send real keyboard/mouse events when Accessibility alone can't do a step? They are posted to the
+   * app in the background (it is not brought to the front and the pointer does not move). Default false.
+   */
   readonly allowRealInput?: boolean;
+  /** May the backend also bring the app to the front for a step background input could not do? Default false. */
+  readonly allowForeground?: boolean;
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
@@ -112,6 +119,7 @@ const ROLE_NAMES: Readonly<Record<string, string>> = {
   AXCell: 'cell',
   AXRow: 'row',
   AXMenuBarItem: 'menu',
+  AXGroup: 'clickable element',
 };
 
 const TEXT_LIMIT = 6000;
@@ -137,7 +145,14 @@ export class AppTarget implements Target {
   }
 
   private async helper(request: AxHelperRequest, timeoutMs?: number): Promise<AxHelperResponse> {
-    return this.options.ax.call({ ...request, pid: this.options.app.pid }, timeoutMs);
+    return this.options.ax.call(
+      {
+        ...request,
+        pid: this.options.app.pid,
+        ...(this.options.allowForeground === true ? { allowForeground: true } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   async snapshot(): Promise<Snapshot> {
