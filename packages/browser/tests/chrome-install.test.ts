@@ -18,9 +18,18 @@ const carried = { folder: FOLDER, extensionId: ID, version: '0.5.1' };
 
 describe('personsChrome', () => {
   const processes = [
-    { pid: 10, args: `${APP} --remote-debugging-pipe --user-data-dir=${HOME}/.marshal/browser/profiles/agent --headless=new about:blank` },
-    { pid: 11, args: `${APP} --remote-debugging-pipe --user-data-dir=/var/folders/x/T/marshal-browser-ab12 --headless=new` },
-    { pid: 12, args: `/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper --type=gpu-process` },
+    {
+      pid: 10,
+      args: `${APP} --remote-debugging-pipe --user-data-dir=${HOME}/.marshal/browser/profiles/agent --headless=new about:blank`,
+    },
+    {
+      pid: 11,
+      args: `${APP} --remote-debugging-pipe --user-data-dir=/var/folders/x/T/marshal-browser-ab12 --headless=new`,
+    },
+    {
+      pid: 12,
+      args: `/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper --type=gpu-process`,
+    },
     { pid: 13, args: `${APP} --type=renderer` },
     { pid: 22, args: `${APP} --profile-directory=Profile 1 chrome://extensions/?id=x` },
   ];
@@ -38,25 +47,62 @@ describe('personsChrome', () => {
 
 describe('existingInstall', () => {
   const prefs = (entry: unknown) => (file: string) =>
-    file.endsWith('Secure Preferences') ? JSON.stringify({ extensions: { settings: { [ID]: entry } } }) : undefined;
+    file.endsWith('Secure Preferences')
+      ? JSON.stringify({ extensions: { settings: { [ID]: entry } } })
+      : undefined;
 
   it('tells the carried folder from another copy', () => {
-    expect(existingInstall('/p', ID, FOLDER, prefs({ path: FOLDER, location: 4 }))).toMatchObject({ present: true, fromCarriedFolder: true });
-    expect(existingInstall('/p', ID, FOLDER, prefs({ path: `${ID}/0.4.0_0`, location: 1 }))).toMatchObject({ present: true, fromCarriedFolder: false });
-    expect(existingInstall('/p', ID, FOLDER, () => undefined)).toEqual({ present: false, fromCarriedFolder: false });
+    expect(existingInstall('/p', ID, FOLDER, prefs({ path: FOLDER, location: 4 }))).toMatchObject({
+      present: true,
+      fromCarriedFolder: true,
+    });
+    expect(
+      existingInstall('/p', ID, FOLDER, prefs({ path: `${ID}/0.4.0_0`, location: 1 })),
+    ).toMatchObject({ present: true, fromCarriedFolder: false });
+    expect(existingInstall('/p', ID, FOLDER, () => undefined)).toEqual({
+      present: false,
+      fromCarriedFolder: false,
+    });
   });
 });
 
+interface FakeState {
+  devMode: boolean;
+  otherCopy: boolean;
+  loaded: boolean;
+  page: boolean;
+  dialog: boolean;
+  panel: boolean;
+  panelDefault: string;
+  tabClosed: boolean;
+  typed: string;
+  calls: string[];
+}
+
+interface FakeNode {
+  nodeId: string;
+  query: number;
+  role: string;
+  subrole: string;
+  title: string;
+  description: string;
+  domId: string;
+  value: string;
+  text: string;
+}
+
 /** A fake chrome://extensions page and open panel behind the helper's find/press/read/setValue/keys ops. */
-function fakeChrome(options: {
-  devMode?: boolean;
-  devModeBlocked?: boolean;
-  otherCopy?: boolean;
-  panelOpensAt?: string;
-  connects?: boolean;
-  frontmost?: () => string;
-} = {}) {
-  const state = {
+function fakeChrome(
+  options: {
+    devMode?: boolean;
+    devModeBlocked?: boolean;
+    otherCopy?: boolean;
+    panelOpensAt?: string;
+    connects?: boolean;
+    frontmost?: () => string;
+  } = {},
+): { state: FakeState; deps: InstallDeps } {
+  const state: FakeState = {
     devMode: options.devMode ?? false,
     otherCopy: options.otherCopy ?? false,
     loaded: false,
@@ -65,22 +111,47 @@ function fakeChrome(options: {
     panel: false,
     panelDefault: 'ORIGINAL',
     tabClosed: false,
-    calls: [] as string[],
+    typed: '',
+    calls: [],
   };
   const nodes = new Map<string, () => void>();
+  const readers = new Map<string, () => string>();
   let next = 0;
-  const node = (fields: Record<string, string>, onPress?: () => void) => {
+  const node = (fields: Record<string, string>, onPress?: () => void): FakeNode => {
     const nodeId = `n${String((next += 1))}`;
     if (onPress) nodes.set(nodeId, onPress);
-    return { nodeId, query: 0, role: '', subrole: '', title: '', description: '', domId: '', value: '', text: '', ...fields };
+    return {
+      nodeId,
+      query: 0,
+      role: '',
+      subrole: '',
+      title: '',
+      description: '',
+      domId: '',
+      value: '',
+      text: '',
+      ...fields,
+    };
   };
-  const cards = () => [
-    ...(state.otherCopy || state.loaded ? [
-      { ...node({ domId: 'extension-id', text: `ID: ${ID}` }), query: 0 },
-      { ...node({ domId: 'removeButton' }, () => { state.dialog = true; }), query: 1 },
-    ] : []),
+  const cards = (): FakeNode[] => [
+    ...(state.otherCopy || state.loaded
+      ? [
+          { ...node({ domId: 'extension-id', text: `ID: ${ID}` }), query: 0 },
+          {
+            ...node({ domId: 'removeButton' }, () => {
+              state.dialog = true;
+            }),
+            query: 1,
+          },
+        ]
+      : []),
     { ...node({ domId: 'extension-id', text: 'ID: ghbmnnjooekpmoecnnnilnnbdlolhkhi' }), query: 0 },
-    { ...node({ domId: 'removeButton' }, () => { throw new Error('removed the wrong extension'); }), query: 1 },
+    {
+      ...node({ domId: 'removeButton' }, () => {
+        throw new Error('removed the wrong extension');
+      }),
+      query: 1,
+    },
   ];
   const helper = async (request: AxHelperRequest): Promise<AxHelperResponse> => {
     state.calls.push(request.op);
@@ -88,17 +159,35 @@ function fakeChrome(options: {
     const first = queries[0] ?? {};
     switch (request.op) {
       case 'apps':
-        return { ok: true, apps: [{ bundleId: 'com.github.Electron', pid: 1, frontmost: (options.frontmost?.() ?? 'electron') === 'electron' }, { bundleId: 'com.google.Chrome', pid: 22, frontmost: options.frontmost?.() === 'chrome' }] };
+        return {
+          ok: true,
+          apps: [
+            {
+              bundleId: 'com.github.Electron',
+              pid: 1,
+              frontmost: (options.frontmost?.() ?? 'electron') === 'electron',
+            },
+            {
+              bundleId: 'com.google.Chrome',
+              pid: 22,
+              frontmost: options.frontmost?.() === 'chrome',
+            },
+          ],
+        };
       case 'keys': {
         const key = (request['keys'] as { name: string }[])[0]?.name;
         if (key === 'return') state.page = true;
         if (key === 'w') state.tabClosed = true;
         return { ok: true };
       }
-      case 'setValue':
+      case 'typeText':
+        state.typed = String(request['text']);
         return { ok: true };
       case 'read':
-        return { ok: true, value: state.devMode ? '1' : '0' };
+        return {
+          ok: true,
+          value: readers.get(String(request['nodeId']))?.() ?? (state.devMode ? '1' : '0'),
+        };
       case 'press': {
         const press = nodes.get(String(request['nodeId']));
         if (!press) return { ok: false, error: 'unknown element' };
@@ -106,22 +195,78 @@ function fakeChrome(options: {
         return { ok: true };
       }
       case 'find': {
-        if (first.description === 'Address and search bar')
-          return { ok: true, matches: [node({ role: 'AXTextField', value: state.page && !state.tabClosed ? 'chrome://extensions' : '' })] };
-        if (first.role === 'AXWebArea') return { ok: true, matches: state.page ? [node({ role: 'AXWebArea' })] : [] };
+        if (first.description === 'Address and search bar') {
+          const bar = node({
+            role: 'AXTextField',
+            value: state.page && !state.tabClosed ? 'chrome://extensions' : '',
+          });
+          readers.set(bar.nodeId, () => state.typed);
+          return { ok: true, matches: [bar] };
+        }
+        if (first.role === 'AXWebArea')
+          return { ok: true, matches: state.page ? [node({ role: 'AXWebArea' })] : [] };
         if (first.domId === 'devMode')
-          return { ok: true, matches: [node({ domId: 'devMode', value: state.devMode ? '1' : '0' }, () => { if (!options.devModeBlocked) state.devMode = true; })] };
+          return {
+            ok: true,
+            matches: [
+              node({ domId: 'devMode', value: state.devMode ? '1' : '0' }, () => {
+                if (!options.devModeBlocked) state.devMode = true;
+              }),
+            ],
+          };
         if (first.domId === 'extension-id') return { ok: true, matches: cards() };
         if (first.domId === 'loadUnpacked')
-          return { ok: true, matches: state.devMode ? [node({ domId: 'loadUnpacked' }, () => { state.panel = true; })] : [] };
+          return {
+            ok: true,
+            matches: state.devMode
+              ? [
+                  node({ domId: 'loadUnpacked' }, () => {
+                    state.panel = true;
+                  }),
+                ]
+              : [],
+          };
         if (first.role === 'AXButton' && first.title === 'Remove')
-          return { ok: true, matches: state.dialog ? [node({ title: 'Remove' }, () => { state.dialog = false; state.otherCopy = false; })] : [] };
-        if (first.role === 'AXSheet') return { ok: true, matches: state.panel ? [node({ role: 'AXSheet' })] : [] };
+          return {
+            ok: true,
+            matches: state.dialog
+              ? [
+                  node({ title: 'Remove' }, () => {
+                    state.dialog = false;
+                    state.otherCopy = false;
+                  }),
+                ]
+              : [],
+          };
+        if (first.role === 'AXSheet')
+          return { ok: true, matches: state.panel ? [node({ role: 'AXSheet' })] : [] };
         if (first.role === 'AXPopUpButton') {
-          const where = options.panelOpensAt ?? (state.panelDefault === FOLDER ? 'chrome-extension' : 'Downloads');
-          return { ok: true, matches: [{ ...node({ title: 'Where:', value: where }), query: 0 }, { ...node({ title: 'Select' }, () => { state.panel = false; state.loaded = true; }), query: 1 }] };
+          const where =
+            options.panelOpensAt ??
+            (state.panelDefault === FOLDER ? 'chrome-extension' : 'Downloads');
+          return {
+            ok: true,
+            matches: [
+              { ...node({ title: 'Where:', value: where }), query: 0 },
+              {
+                ...node({ title: 'Select' }, () => {
+                  state.panel = false;
+                  state.loaded = true;
+                }),
+                query: 1,
+              },
+            ],
+          };
         }
-        if (first.title === 'Cancel') return { ok: true, matches: [node({ title: 'Cancel' }, () => { state.panel = false; })] };
+        if (first.title === 'Cancel')
+          return {
+            ok: true,
+            matches: [
+              node({ title: 'Cancel' }, () => {
+                state.panel = false;
+              }),
+            ],
+          };
         return { ok: true, matches: [] };
       }
       default:
@@ -143,7 +288,9 @@ function fakeChrome(options: {
       state.panelDefault = value;
       return 'ok';
     },
-    sleep: async (ms) => { clock += ms; },
+    sleep: async (ms) => {
+      clock += ms;
+    },
     now: () => clock,
     homeDir: HOME,
     platform: 'darwin',
@@ -155,7 +302,12 @@ describe('installChromeExtension', () => {
   it('turns on Developer mode, loads the carried folder through the panel, waits for the connection, cleans up', async () => {
     const { state, deps } = fakeChrome();
     const result = await installChromeExtension(carried, {}, deps);
-    expect(result).toMatchObject({ ok: true, status: 'installed', chromeCameForward: false, chrome: { pid: 22, profile: 'Default' } });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'installed',
+      chromeCameForward: false,
+      chrome: { pid: 22, profile: 'Default' },
+    });
     expect(result.steps.map((step) => step.step)).toEqual([
       'find Chrome',
       'open a background tab',
@@ -165,24 +317,37 @@ describe('installChromeExtension', () => {
       'Select',
       'wait for connection',
     ]);
-    expect(result.steps.every((step) => step.frontmostBefore === 'com.github.Electron#1' && step.frontmostAfter === 'com.github.Electron#1')).toBe(true);
+    expect(
+      result.steps.every(
+        (step) =>
+          step.frontmostBefore === 'com.github.Electron#1' &&
+          step.frontmostAfter === 'com.github.Electron#1',
+      ),
+    ).toBe(true);
     expect(state.panelDefault).toBe('ORIGINAL');
     expect(state.tabClosed).toBe(true);
     expect(state.calls).not.toContain('focus');
     expect(state.calls).not.toContain('clickAt');
+    expect(state.calls).not.toContain('setValue');
   });
 
   it('removes another copy with the same id first, and never another extension', async () => {
     const { deps } = fakeChrome({ devMode: true, otherCopy: true });
     const result = await installChromeExtension(carried, {}, deps);
     expect(result.status).toBe('installed');
-    expect(result.steps.map((step) => step.step)).toContain('remove the other copy with the same id');
+    expect(result.steps.map((step) => step.step)).toContain(
+      'remove the other copy with the same id',
+    );
   });
 
   it('stops when a policy keeps Developer mode off', async () => {
     const { state, deps } = fakeChrome({ devModeBlocked: true });
     const result = await installChromeExtension(carried, {}, deps);
-    expect(result).toMatchObject({ ok: false, status: 'stopped', reason: 'developer_mode_blocked' });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'stopped',
+      reason: 'developer_mode_blocked',
+    });
     expect(state.tabClosed).toBe(true);
   });
 
@@ -217,15 +382,20 @@ describe('installChromeExtension', () => {
 
   it('stops off macOS and without a carried folder', async () => {
     const { deps } = fakeChrome();
-    expect((await installChromeExtension(carried, {}, { ...deps, platform: 'linux' })).reason).toBe('not_macos');
-    expect((await installChromeExtension({ folder: null }, {}, deps)).reason).toBe('no_carried_folder');
+    expect((await installChromeExtension(carried, {}, { ...deps, platform: 'linux' })).reason).toBe(
+      'not_macos',
+    );
+    expect((await installChromeExtension({ folder: null }, {}, deps)).reason).toBe(
+      'no_carried_folder',
+    );
   });
 
   it('waits only, when the carried folder is already loaded and connects', async () => {
     const { state, deps } = fakeChrome();
     state.loaded = true;
-    const read = (file: string) =>
-      file === path.join(HOME, 'Library/Application Support/Google/Chrome/Default/Secure Preferences')
+    const read = (file: string): string | undefined =>
+      file ===
+      path.join(HOME, 'Library/Application Support/Google/Chrome/Default/Secure Preferences')
         ? JSON.stringify({ extensions: { settings: { [ID]: { path: FOLDER, location: 4 } } } })
         : undefined;
     const result = await installChromeExtension(carried, {}, { ...deps, readFile: read });

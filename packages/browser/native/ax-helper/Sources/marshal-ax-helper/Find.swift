@@ -41,6 +41,7 @@ enum Find {
     AXUIElementSetMessagingTimeout(app, 3.0)
     // Chromium and Electron build their web tree only for an assistive client that asks.
     _ = AXAttr.set(app, "AXManualAccessibility", kCFBooleanTrue)
+    _ = AXAttr.set(app, "AXEnhancedUserInterface", kCFBooleanTrue)
     return app
   }
 

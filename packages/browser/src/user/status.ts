@@ -121,7 +121,7 @@ function chromeSteps(carried: CarriedExtension, address: string): string[] {
         ]),
     ...(carried.folder
       ? [
-          "On macOS Marshal does all of this itself, in the background (Chrome stays behind, nobody clicks): call browser.chrome.install. The steps below are what it does, for a person doing it by hand or when it stops with a reason.",
+          'On macOS Marshal does all of this itself, in the background (Chrome stays behind, nobody clicks): call browser.chrome.install. The steps below are what it does, for a person doing it by hand or when it stops with a reason.',
         ]
       : []),
     'In Chrome open chrome://extensions and turn on Developer mode (top right).',

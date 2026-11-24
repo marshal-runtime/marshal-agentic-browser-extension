@@ -146,7 +146,7 @@ export class BrowserService {
     });
     const helper = this.installHelper;
     const integer = (key: string): number | undefined =>
-      typeof args[key] === 'number' && Number.isInteger(args[key]) ? (args[key] as number) : undefined;
+      typeof args[key] === 'number' && Number.isInteger(args[key]) ? args[key] : undefined;
     const pid = integer('pid');
     const connectTimeoutMs = integer('connectTimeoutMs');
     return installChromeExtension(

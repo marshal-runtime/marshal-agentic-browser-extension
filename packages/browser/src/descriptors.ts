@@ -590,17 +590,19 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       pid: {
         type: 'integer',
         description:
-          'A specific Chrome process (main process pid) to install into, instead of the person\'s regular Chrome.',
+          "A specific Chrome process (main process pid) to install into, instead of the person's regular Chrome.",
       },
       appPath: {
         type: 'string',
-        description: 'Chrome.app to start when none runs (default /Applications/Google Chrome.app).',
+        description:
+          'Chrome.app to start when none runs (default /Applications/Google Chrome.app).',
       },
       connectTimeoutMs: {
         type: 'integer',
         minimum: 1000,
         maximum: 120000,
-        description: 'How long to wait for the extension to connect after loading it (default 40000).',
+        description:
+          'How long to wait for the extension to connect after loading it (default 40000).',
       },
     }),
     outputSchema: object({

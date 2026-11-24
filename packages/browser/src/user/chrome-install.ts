@@ -69,7 +69,11 @@ export interface ChromeInstallResult {
   readonly steps: readonly InstallStep[];
   /** True when Chrome was the frontmost app after any step while it was not before the run. */
   readonly chromeCameForward: boolean;
-  readonly userBrowser?: { readonly ready: boolean; readonly reason: string; readonly detail: string };
+  readonly userBrowser?: {
+    readonly ready: boolean;
+    readonly reason: string;
+    readonly detail: string;
+  };
 }
 
 export interface ExistingInstall {
@@ -95,10 +99,7 @@ export interface InstallDeps {
   readonly launch: (appPath: string) => Promise<void>;
   readonly readFile: (file: string) => string | undefined;
   /** Gets / sets / restores a data default (base64) of another app's domain; '' when unset. */
-  readonly panelDefault: (
-    mode: 'get' | 'set' | 'restore',
-    value: string,
-  ) => Promise<string>;
+  readonly panelDefault: (mode: 'get' | 'set' | 'restore', value: string) => Promise<string>;
   readonly sleep: (ms: number) => Promise<void>;
   readonly now: () => number;
   readonly homeDir: string;
@@ -131,7 +132,8 @@ export function personsChrome(
   const ours = path.join(homeDir, '.marshal', 'browser');
   return processes.find(({ args }) => {
     if (!args.startsWith(binary) || args.includes(' --type=')) return false;
-    if (/\s--headless(=|\s|$)/.test(args) || /\s--remote-debugging-(pipe|port)/.test(args)) return false;
+    if (/\s--headless(=|\s|$)/.test(args) || /\s--remote-debugging-(pipe|port)/.test(args))
+      return false;
     const dataDir = userDataDirOf(args);
     if (!dataDir) return true;
     return !dataDir.startsWith(ours) && !path.basename(dataDir).startsWith('marshal-browser-');
@@ -170,7 +172,12 @@ export function existingInstall(
   for (const name of ['Secure Preferences', 'Preferences']) {
     try {
       const prefs = JSON.parse(read(path.join(profileDir, name)) ?? '{}') as {
-        extensions?: { settings?: Record<string, { path?: unknown; location?: unknown; manifest?: { version?: unknown } }> };
+        extensions?: {
+          settings?: Record<
+            string,
+            { path?: unknown; location?: unknown; manifest?: { version?: unknown } }
+          >;
+        };
       };
       const entry = prefs.extensions?.settings?.[extensionId];
       if (!entry) continue;
@@ -179,7 +186,9 @@ export function existingInstall(
       return {
         present: true,
         fromCarriedFolder:
-          location === UNPACKED_LOCATION && !!entryPath && path.resolve(entryPath) === path.resolve(folder),
+          location === UNPACKED_LOCATION &&
+          !!entryPath &&
+          path.resolve(entryPath) === path.resolve(folder),
         ...(entryPath ? { path: entryPath } : {}),
         ...(location !== undefined ? { location } : {}),
         ...(typeof entry.manifest?.version === 'string' ? { version: entry.manifest.version } : {}),
@@ -243,31 +252,54 @@ export async function installChromeExtension(
     chromePid > 0 &&
     steps.some((step) => step.frontmostAfter.endsWith(`#${String(chromePid)}`));
 
-  const step = async <T>(name: string, run: () => Promise<{ value: T; detail?: string }>): Promise<T> => {
+  const step = async <T>(
+    name: string,
+    run: () => Promise<{ value: T; detail?: string }>,
+  ): Promise<T> => {
     const started = deps.now();
     const before = await frontmost();
     try {
       const { value, detail } = await run();
-      steps.push({ step: name, ok: true, ...(detail ? { detail } : {}), frontmostBefore: before, frontmostAfter: await frontmost(), ms: deps.now() - started });
+      steps.push({
+        step: name,
+        ok: true,
+        ...(detail ? { detail } : {}),
+        frontmostBefore: before,
+        frontmostAfter: await frontmost(),
+        ms: deps.now() - started,
+      });
       return value;
     } catch (error) {
-      steps.push({ step: name, ok: false, detail: error instanceof Error ? error.message : String(error), frontmostBefore: before, frontmostAfter: await frontmost(), ms: deps.now() - started });
+      steps.push({
+        step: name,
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        frontmostBefore: before,
+        frontmostAfter: await frontmost(),
+        ms: deps.now() - started,
+      });
       throw error;
     }
   };
 
   const call = async (request: AxHelperRequest): Promise<AxHelperResponse> => {
     const response = await deps.helper(request);
-    if (!response.ok) throw new Stop('helper_failed', `${request.op}: ${response.error ?? 'failed'}`);
+    if (!response.ok)
+      throw new Stop('helper_failed', `${request.op}: ${response.error ?? 'failed'}`);
     return response;
   };
   const find = async (request: Omit<AxHelperRequest, 'op'>): Promise<Match[]> =>
-    ((await call({ op: 'find', pid: chromePid, ...request }))['matches'] as Match[] | undefined) ?? [];
+    ((await call({ op: 'find', pid: chromePid, ...request }))['matches'] as Match[] | undefined) ??
+    [];
   const press = async (nodeId: string, what: string): Promise<void> => {
     const response = await deps.helper({ op: 'press', pid: chromePid, nodeId });
-    if (!response.ok) throw new Stop('helper_failed', `press ${what}: ${response.error ?? 'failed'}`);
+    if (!response.ok)
+      throw new Stop('helper_failed', `press ${what}: ${response.error ?? 'failed'}`);
   };
-  const poll = async <T>(timeoutMs: number, probe: () => Promise<T | undefined>): Promise<T | undefined> => {
+  const poll = async <T>(
+    timeoutMs: number,
+    probe: () => Promise<T | undefined>,
+  ): Promise<T | undefined> => {
     const until = deps.now() + timeoutMs;
     for (;;) {
       const value = await probe();
@@ -302,12 +334,24 @@ export async function installChromeExtension(
   };
 
   if (deps.platform !== 'darwin')
-    return finish('stopped', new Stop('not_macos', 'browser.chrome.install drives Chrome through macOS Accessibility; on this system load the folder by hand (browser.status setup).'));
+    return finish(
+      'stopped',
+      new Stop(
+        'not_macos',
+        'browser.chrome.install drives Chrome through macOS Accessibility; on this system load the folder by hand (browser.status setup).',
+      ),
+    );
   if (!folder || !carried.extensionId)
-    return finish('stopped', new Stop('no_carried_folder', 'This install of @marshal/browser carries no Chrome extension folder (or its id is unknown).'));
+    return finish(
+      'stopped',
+      new Stop(
+        'no_carried_folder',
+        'This install of @marshal/browser carries no Chrome extension folder (or its id is unknown).',
+      ),
+    );
 
-  let restorePanel: string | undefined;
-  let tabOpened = false;
+  // Set inside the steps' closures, read in finally.
+  const cleanup: { restorePanel?: string; tabOpened: boolean } = { tabOpened: false };
   try {
     const appPath = input.appPath ?? CHROME_APP;
     const found = await step('find Chrome', async () => {
@@ -315,15 +359,28 @@ export async function installChromeExtension(
       if (input.pid !== undefined) {
         const given = processes.find((process) => process.pid === input.pid);
         if (!given) throw new Stop('chrome_not_found', `No process with pid ${String(input.pid)}.`);
-        return { value: { process: given, launched: false }, detail: `pid ${String(given.pid)} (given)` };
+        return {
+          value: { process: given, launched: false },
+          detail: `pid ${String(given.pid)} (given)`,
+        };
       }
       const running = personsChrome(processes, deps.homeDir, appPath);
-      if (running) return { value: { process: running, launched: false }, detail: `pid ${String(running.pid)}` };
-      if (input.dryRun) return { value: undefined, detail: 'not running; would start it in the background' };
+      if (running)
+        return {
+          value: { process: running, launched: false },
+          detail: `pid ${String(running.pid)}`,
+        };
+      if (input.dryRun)
+        return { value: undefined, detail: 'not running; would start it in the background' };
       await deps.launch(appPath);
-      const started = await poll(15_000, async () => personsChrome(await deps.processes(), deps.homeDir, appPath));
+      const started = await poll(15_000, async () =>
+        personsChrome(await deps.processes(), deps.homeDir, appPath),
+      );
       if (!started) throw new Stop('chrome_did_not_start', `${appPath} did not start.`);
-      return { value: { process: started, launched: true }, detail: `started pid ${String(started.pid)} in the background` };
+      return {
+        value: { process: started, launched: true },
+        detail: `started pid ${String(started.pid)} in the background`,
+      };
     });
 
     if (found) {
@@ -331,7 +388,12 @@ export async function installChromeExtension(
       const userDataDir = userDataDirOf(found.process.args) ?? defaultUserDataDir(deps.homeDir);
       const profile = lastUsedProfile(userDataDir, deps.readFile);
       chrome = { pid: chromePid, launched: found.launched, userDataDir, profile };
-      existing = existingInstall(path.join(userDataDir, profile), carried.extensionId, folder, deps.readFile);
+      existing = existingInstall(
+        path.join(userDataDir, profile),
+        carried.extensionId,
+        folder,
+        deps.readFile,
+      );
       chromeFrontAtStart = (await frontmost()).endsWith(`#${String(chromePid)}`);
     }
 
@@ -362,31 +424,80 @@ export async function installChromeExtension(
     }
 
     const windowAddressBar = async (): Promise<Match | undefined> =>
-      (await find({ queries: [{ role: 'AXTextField', description: 'Address and search bar' }], skipRoles: SKIP_WEB, maxDepth: 14, limit: 1 }))[0];
+      (
+        await find({
+          queries: [{ role: 'AXTextField', description: 'Address and search bar' }],
+          skipRoles: SKIP_WEB,
+          maxDepth: 14,
+          limit: 1,
+        })
+      )[0];
+
+    const tabCount = async (): Promise<number> =>
+      (
+        await find({
+          queries: [{ role: 'AXRadioButton', subrole: 'AXTabButton' }],
+          skipRoles: SKIP_WEB,
+          maxDepth: 12,
+        })
+      ).length;
 
     await step('open a background tab', async () => {
+      if (!(await poll(10_000, windowAddressBar)))
+        throw new Stop('no_window', 'Chrome has no window with an address bar.');
+      const tabsBefore = await tabCount();
       await call({ op: 'keys', pid: chromePid, keys: [{ name: 't', modifiers: ['cmd'] }] });
-      tabOpened = true;
-      const bar = await poll(5_000, windowAddressBar);
-      if (!bar) throw new Stop('no_window', 'Chrome opened no window with an address bar.');
-      await call({ op: 'setValue', pid: chromePid, nodeId: bar.nodeId, text: 'chrome://extensions/' });
-      await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
-      return { value: undefined };
+      cleanup.tabOpened = true;
+      // Keys sent before the new tab is ready are lost: wait for it, then let its address bar settle.
+      await poll(5_000, async () => ((await tabCount()) > tabsBefore ? true : undefined));
+      await deps.sleep(400);
+      // Keys posted to Chrome's pid, never an AXFocused write (focusing a field can bring its app forward).
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const bar = await windowAddressBar();
+        if (!bar) throw new Stop('no_window', 'Chrome has no window with an address bar.');
+        await call({ op: 'keys', pid: chromePid, keys: [{ name: 'l', modifiers: ['cmd'] }] });
+        await call({ op: 'typeText', pid: chromePid, text: 'chrome://extensions/' });
+        const typed = await poll(1_500, async () => {
+          const read = await call({ op: 'read', nodeId: bar.nodeId });
+          return String(read['value']).startsWith('chrome://extensions') ? true : undefined;
+        });
+        if (typed) {
+          await call({ op: 'keys', pid: chromePid, keys: [{ name: 'return' }] });
+          return {
+            value: undefined,
+            detail: attempt ? `typed on attempt ${String(attempt + 1)}` : undefined,
+          };
+        }
+      }
+      throw new Stop('no_window', 'The address bar did not take the typed address.');
     });
 
     const page = await step('load chrome://extensions', async () => {
       const area = await poll(15_000, async () => {
-        const areas = await find({ queries: [{ role: 'AXWebArea', title: 'Extensions' }], skipRoles: SKIP_WEB, maxDepth: 14, limit: 1 });
+        const areas = await find({
+          queries: [{ role: 'AXWebArea', title: 'Extensions' }],
+          skipRoles: SKIP_WEB,
+          maxDepth: 14,
+          limit: 1,
+        });
         if (!areas[0]) return undefined;
-        const ready = await find({ within: areas[0].nodeId, queries: [{ domId: 'devMode' }], maxDepth: 24, limit: 1 });
+        const ready = await find({
+          within: areas[0].nodeId,
+          queries: [{ domId: 'devMode' }],
+          maxDepth: 24,
+          limit: 1,
+        });
         return ready[0] ? areas[0] : undefined;
       });
-      if (!area) throw new Stop('page_did_not_load', 'chrome://extensions did not load in the new tab.');
+      if (!area)
+        throw new Stop('page_did_not_load', 'chrome://extensions did not load in the new tab.');
       return { value: area };
     });
 
     await step('Developer mode', async () => {
-      const toggle = (await find({ within: page.nodeId, queries: [{ domId: 'devMode' }], maxDepth: 24, limit: 1 }))[0];
+      const toggle = (
+        await find({ within: page.nodeId, queries: [{ domId: 'devMode' }], maxDepth: 24, limit: 1 })
+      )[0];
       if (!toggle) throw new Stop('page_did_not_load', 'No Developer mode switch on the page.');
       if (toggle.value === '1') return { value: undefined, detail: 'already on' };
       await press(toggle.nodeId, 'Developer mode');
@@ -394,23 +505,31 @@ export async function installChromeExtension(
         const read = await call({ op: 'read', nodeId: toggle.nodeId });
         return read['value'] === '1' ? true : undefined;
       });
-      if (!on) throw new Stop('developer_mode_blocked', 'Developer mode did not turn on: a policy for this Chrome profile (DeveloperToolsAvailability / ExtensionDeveloperModeSettings) may block it.');
+      if (!on)
+        throw new Stop(
+          'developer_mode_blocked',
+          'Developer mode did not turn on: a policy for this Chrome profile (DeveloperToolsAvailability / ExtensionDeveloperModeSettings) may block it.',
+        );
       return { value: undefined, detail: 'turned on' };
     });
 
     const cards = async (): Promise<{ id: string; remove?: string; reload?: string }[]> => {
       const matches = await find({
         within: page.nodeId,
-        queries: [{ domId: 'extension-id' }, { domId: 'removeButton' }, { domId: 'dev-reload-button' }],
+        queries: [
+          { domId: 'extension-id' },
+          { domId: 'removeButton' },
+          { domId: 'dev-reload-button' },
+        ],
         maxDepth: 30,
       });
       const out: { id: string; remove?: string; reload?: string }[] = [];
       for (const match of matches) {
         if (match.query === 0) out.push({ id: /[a-p]{32}/.exec(match.text)?.[0] ?? '' });
         else if (out.length > 0) {
-          const last = out[out.length - 1]!;
-          if (match.query === 1 && !last.remove) last.remove = match.nodeId;
-          if (match.query === 2 && !last.reload) last.reload = match.nodeId;
+          const last = out[out.length - 1];
+          if (last && match.query === 1 && !last.remove) last.remove = match.nodeId;
+          if (last && match.query === 2 && !last.reload) last.reload = match.nodeId;
         }
       }
       return out;
@@ -429,31 +548,57 @@ export async function installChromeExtension(
         await step('remove the other copy with the same id', async () => {
           if (!sameId.remove) throw new Stop('remove_failed', 'Its card has no Remove button.');
           await press(sameId.remove, 'Remove');
-          const confirm = await poll(5_000, async () =>
-            (await find({ queries: [{ role: 'AXButton', title: 'Remove' }], skipRoles: SKIP_WEB, maxDepth: 12, limit: 1 }))[0],
+          const confirm = await poll(
+            5_000,
+            async () =>
+              (
+                await find({
+                  queries: [{ role: 'AXButton', title: 'Remove' }],
+                  skipRoles: SKIP_WEB,
+                  maxDepth: 12,
+                  limit: 1,
+                })
+              )[0],
           );
           if (!confirm) throw new Stop('remove_failed', "Chrome's Remove dialog did not appear.");
           await press(confirm.nodeId, 'Remove (dialog)');
           const gone = await poll(5_000, async () =>
             (await cards()).some((entry) => entry.id === carried.extensionId) ? undefined : true,
           );
-          if (!gone) throw new Stop('remove_failed', 'The other copy is still listed after Remove.');
+          if (!gone)
+            throw new Stop('remove_failed', 'The other copy is still listed after Remove.');
           return { value: undefined, detail: existing?.path ? `was ${existing.path}` : undefined };
         });
       }
 
       const sheet = await step('open Load unpacked at the carried folder', async () => {
-        restorePanel = await deps.panelDefault('get', '');
+        cleanup.restorePanel = await deps.panelDefault('get', '');
         await deps.panelDefault('set', folder);
-        const button = (await find({ within: page.nodeId, queries: [{ domId: 'loadUnpacked' }], maxDepth: 24, limit: 1 }))[0];
-        if (!button) throw new Stop('open_panel_failed', 'No Load unpacked button (Developer mode off?).');
+        const button = (
+          await find({
+            within: page.nodeId,
+            queries: [{ domId: 'loadUnpacked' }],
+            maxDepth: 24,
+            limit: 1,
+          })
+        )[0];
+        if (!button)
+          throw new Stop('open_panel_failed', 'No Load unpacked button (Developer mode off?).');
         await press(button.nodeId, 'Load unpacked');
         const panel = await poll(8_000, async () => {
-          const found = await find({ queries: [{ role: 'AXSheet' }], skipRoles: SKIP_WEB, maxDepth: 2, limit: 1 });
+          const found = await find({
+            queries: [{ role: 'AXSheet' }],
+            skipRoles: SKIP_WEB,
+            maxDepth: 2,
+            limit: 1,
+          });
           if (!found[0]) return undefined;
           const controls = await find({
             within: found[0].nodeId,
-            queries: [{ role: 'AXPopUpButton', title: 'Where:' }, { role: 'AXButton', title: 'Select' }],
+            queries: [
+              { role: 'AXPopUpButton', title: 'Where:' },
+              { role: 'AXButton', title: 'Select' },
+            ],
             skipRoles: SKIP_PANEL_LISTS,
             maxDepth: 4,
           });
@@ -463,9 +608,19 @@ export async function installChromeExtension(
         });
         if (!panel) throw new Stop('open_panel_failed', 'The folder panel did not open.');
         if (panel.where.value !== path.basename(folder)) {
-          const cancel = (await find({ queries: [{ role: 'AXButton', title: 'Cancel' }], skipRoles: SKIP_PANEL_LISTS, maxDepth: 4, limit: 1 }))[0];
+          const cancel = (
+            await find({
+              queries: [{ role: 'AXButton', title: 'Cancel' }],
+              skipRoles: SKIP_PANEL_LISTS,
+              maxDepth: 4,
+              limit: 1,
+            })
+          )[0];
           if (cancel) await press(cancel.nodeId, 'Cancel');
-          throw new Stop('open_panel_elsewhere', `The folder panel opened at "${panel.where.value}", not ${folder}.`);
+          throw new Stop(
+            'open_panel_elsewhere',
+            `The folder panel opened at "${panel.where.value}", not ${folder}.`,
+          );
         }
         return { value: panel, detail: `Where: ${panel.where.value}` };
       });
@@ -475,26 +630,39 @@ export async function installChromeExtension(
         const loaded = await poll(10_000, async () =>
           (await cards()).some((entry) => entry.id === carried.extensionId) ? true : undefined,
         );
-        if (!loaded) throw new Stop('not_loaded', 'chrome://extensions does not list the extension after Load unpacked (a load error dialog may be open in Chrome).');
-        return { value: undefined, detail: `listed as ${carried.extensionId}` };
+        if (!loaded)
+          throw new Stop(
+            'not_loaded',
+            'chrome://extensions does not list the extension after Load unpacked (a load error dialog may be open in Chrome).',
+          );
+        return { value: undefined, detail: `listed as ${String(carried.extensionId)}` };
       });
     }
 
-    const connected = await step('wait for connection', async () => {
+    await step('wait for connection', async () => {
       const status = await poll(input.connectTimeoutMs ?? 40_000, async () => {
         const current = await deps.status();
         return current.ready ? current : undefined;
       });
-      if (!status) throw new Stop('not_connected', 'The extension is loaded but has not reached this Marshal yet (its switch "Let Marley use this browser" may be off).');
+      if (!status)
+        throw new Stop(
+          'not_connected',
+          'The extension is loaded but has not reached this Marshal yet (its switch "Let Marley use this browser" may be off).',
+        );
       return { value: status, detail: status.detail };
     });
-    return await finish(connected && existing?.fromCarriedFolder ? 'already_installed' : 'installed');
+    return await finish(existing?.fromCarriedFolder ? 'already_installed' : 'installed');
   } catch (error) {
-    if (error instanceof Stop) return finish('stopped', error);
-    return finish('stopped', new Stop('helper_failed', error instanceof Error ? error.message : String(error)));
+    if (error instanceof Stop) return await finish('stopped', error);
+    return await finish(
+      'stopped',
+      new Stop('helper_failed', error instanceof Error ? error.message : String(error)),
+    );
   } finally {
-    if (restorePanel !== undefined) await deps.panelDefault('restore', restorePanel).catch(() => '');
-    if (tabOpened && chromePid > 0) await closeExtensionsTab(deps, chromePid).catch(() => undefined);
+    if (cleanup.restorePanel !== undefined)
+      await deps.panelDefault('restore', cleanup.restorePanel).catch(() => '');
+    if (cleanup.tabOpened && chromePid > 0)
+      await closeExtensionsTab(deps, chromePid).catch(() => undefined);
   }
 }
 
@@ -517,10 +685,15 @@ async function closeExtensionsTab(deps: InstallDeps, pid: number): Promise<void>
 
 const run = (file: string, args: readonly string[]): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(file, [...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
-    });
+    execFile(
+      file,
+      [...args],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(new Error(`${file}: ${error.message}`));
+        else resolve(stdout);
+      },
+    );
   });
 
 /** A JXA script: reads, sets (as a bookmark of a folder) or restores a data default of another app's domain. */
@@ -561,7 +734,16 @@ export function realInstallDeps(
     readFile: (file) => (existsSync(file) ? readFileSync(file, 'utf8') : undefined),
     panelDefault: async (mode, value) =>
       (
-        await run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', PANEL_SCRIPT, mode, CHROME_BUNDLE, PANEL_DEFAULT, value])
+        await run('/usr/bin/osascript', [
+          '-l',
+          'JavaScript',
+          '-e',
+          PANEL_SCRIPT,
+          mode,
+          CHROME_BUNDLE,
+          PANEL_DEFAULT,
+          value,
+        ])
       ).trim(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
