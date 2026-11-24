@@ -303,6 +303,69 @@ describe.runIf(process.platform === 'darwin')('browser.task on:"app"', () => {
     expect(requests().find((r) => r['op'] === 'press')).toMatchObject({ allowRealInput: true });
   });
 
+  it('real input is background only: the foreground opt-in reaches the helper only when the caller set allowForeground', async () => {
+    const background = harness(launchedCalc(), [
+      { choice: 'click e5' },
+      { choice: 'done', goalMet: 0.95 },
+    ]);
+    await background.invoke('browser.task', {
+      goal: 'clear the display',
+      on: 'app',
+      app: 'Calc',
+      allowRealInput: true,
+    });
+    expect(background.requests().some((r) => 'allowForeground' in r)).toBe(false);
+    const foreground = harness(launchedCalc(), [
+      { choice: 'click e5' },
+      { choice: 'done', goalMet: 0.95 },
+    ]);
+    await foreground.invoke('browser.task', {
+      goal: 'clear the display',
+      on: 'app',
+      app: 'Calc',
+      allowRealInput: true,
+      allowForeground: true,
+    });
+    expect(foreground.requests().find((r) => r['op'] === 'press')).toMatchObject({
+      allowRealInput: true,
+      allowForeground: true,
+    });
+  });
+
+  it('by name never picks a copy started by automation (a headless Chrome); pid picks one copy exactly', async () => {
+    const chromes = {
+      apps: [
+        { name: 'Google Chrome', bundleId: 'com.google.Chrome', pid: 9, automation: true },
+        { name: 'Google Chrome', bundleId: 'com.google.Chrome', pid: PID },
+      ],
+    };
+    const byName = harness(launchedCalc(chromes), [{ choice: 'done', goalMet: 0.95 }]);
+    const out = await byName.invoke('browser.task', {
+      goal: 'read the window',
+      on: 'app',
+      app: 'Google Chrome',
+    });
+    expect(out['status']).toBe('done');
+    const pids = byName
+      .requests()
+      .filter((r) => r['op'] === 'snapshot')
+      .map((r) => r['pid']);
+    expect(pids.length).toBeGreaterThan(0);
+    expect(pids.every((pid) => pid === PID)).toBe(true);
+    expect(byName.requests().some((r) => r['op'] === 'launch')).toBe(false);
+
+    const byPid = harness(launchedCalc(chromes), [{ choice: 'done', goalMet: 0.95 }]);
+    const opened = await byPid.invoke('browser.session.open', {
+      on: 'app',
+      app: 'Google Chrome',
+      pid: 9,
+    });
+    expect(opened).toMatchObject({ ok: true, backend: 'app' });
+    expect(String(opened['app'])).toContain('pid 9');
+    const missing = await byPid.invoke('browser.session.open', { on: 'app', pid: 31337 });
+    expect(missing).toMatchObject({ ok: false, reason: 'app_not_running' });
+  });
+
   it('never offers a password field, and session.act refuses it without asking the helper', async () => {
     const { invoke, decider, requests } = harness(launchedCalc(), [
       { choice: 'done', goalMet: 0.95 },

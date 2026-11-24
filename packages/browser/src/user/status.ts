@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from 'fs';
 import path from 'node:path';
 import type { BridgeClient, BridgeStatus } from './bridge.js';
+import { BRIDGE_FILE } from './carried-folder.js';
 import { extensionIdOf } from './extension-id.js';
 
 export type UserBrowserReason =
@@ -118,10 +119,15 @@ function chromeSteps(carried: CarriedExtension, address: string): string[] {
       : [
           'This install of @marshal/browser carries no Chrome extension folder (dist/chrome-extension is missing): reinstall the package, then follow the steps below.',
         ]),
+    ...(carried.folder
+      ? [
+          'On macOS Marshal does all of this itself, in the background (Chrome stays behind, nobody clicks): call browser.chrome.install. The steps below are what it does, for a person doing it by hand or when it stops with a reason.',
+        ]
+      : []),
     'In Chrome open chrome://extensions and turn on Developer mode (top right).',
     `Click Load unpacked and pick this folder: ${carried.folder ?? '<the dist/chrome-extension folder of @marshal/browser>'}. It is the Marley extension${carried.version ? ` ${carried.version}` : ''}, carried in this install. If Marley from the Marley website is already there, remove it first (same extension id).${carried.folderNote ? ` ${carried.folderNote}` : ''}`,
-    `Click the Marley extension's icon, open "Developer: Marshal bridge" and enter ${address}.`,
-    'In the same popup make sure "Let Marley use this browser" is on. The badge shows "on" once it reaches Marshal.',
+    `The folder carries this Marshal's bridge address (${BRIDGE_FILE}), so the extension connects by itself. Only if it does not: click the Marley extension's icon, open "Developer: Marshal bridge" and enter ${address}.`,
+    'In the extension\'s popup "Let Marley use this browser" must be on (it is by default). The badge shows "on" once it reaches Marshal.',
     'Run browser.status again: the user backend reads ready.',
   ];
 }
@@ -182,7 +188,7 @@ function setupBody(
     case 'not_connected':
       return {
         summary:
-          "The person's Chrome is not connected: load the Marley Chrome extension carried in this install (developer mode, Load unpacked), point it at Marshal and switch it on.",
+          "The person's Chrome is not connected: load the Marley Chrome extension carried in this install (developer mode, Load unpacked). On macOS browser.chrome.install does it in the background, with no clicks.",
         steps: chromeSteps(carried, address),
       };
     case 'error':

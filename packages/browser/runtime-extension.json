@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "identity": "@marshal/browser",
   "displayName": "Browser",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "entrypoint": "dist/runtime.cjs",
   "moduleFormat": "commonjs-bundle-v1",
   "configuration": {
@@ -89,7 +89,7 @@
   },
   "agentGuidance": {
     "purpose": "One browser for agents: a Chrome it starts (agent, visitor, offline profiles), the person's own Chrome (on:\"user\") or a native macOS app via Accessibility (on:\"app\"). A task is a code loop; each step is one marshal.models.decide call.",
-    "when": "browser.task: 'open X and get me Y' or a few UI steps; browser.ask: questions about one page; browser.session.*: drive it yourself (act, wait, read, evaluate, log, dialog). A goal that needs the person's own login runs on:\"user\"; if browser.status says it is not paired, give them its setup steps.",
+    "when": "browser.task: 'open X and get me Y' or a few UI steps; browser.ask: questions about one page; browser.session.*: drive it yourself. Own login: on:\"user\"; if status says not_connected, run browser.chrome.install (macOS, background).",
     "recipe": "browser.task {goal, startUrl, want: {data: <JSON schema>, text, screenshot}, values: {name: text to type}} returns {status, data, text, artifacts, trace}. On needs_owner, needs_input or low_confidence, read reason, candidates and the screenshot, then decide yourself.",
     "boundaries": "Task: types only caller values; stops in code on leaving its site, off-site forms/links, OAuth/checkout/payment pages, private addresses, app signals. No key or text reaches a password field. evaluate: managed Chrome only. Own Chrome: background tabs, text-only. Apps: no real input by default."
   },
@@ -109,6 +109,7 @@
       "browser.session.dialog",
       "browser.task",
       "browser.ask",
+      "browser.chrome.install",
       "browser.task.get",
       "browser.task.list",
       "browser.task.cancel",

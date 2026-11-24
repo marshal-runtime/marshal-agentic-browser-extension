@@ -7,8 +7,12 @@ import { SITE_INSTALL } from "./install-channel.js";
 // The local socket reaches a Marshal on this machine (developers). A store install (update_url) and a download from the Marley site
 // (SITE_INSTALL, set by the site's packager) skip it and pair only with production.
 const DEVELOPER_INSTALL = !chrome.runtime.getManifest().update_url && !SITE_INSTALL;
-// The local Marshal socket (it allows evaluate) is opt-in: a developer types its URL in the popup. Never on a store install.
-const DEFAULTS = { enabled: true, bridgeUrl: "" };
+// The local Marshal socket (it allows evaluate) is opt-in: a developer types its URL in the popup, or Marshal writes it
+// to marshal-bridge.json in the folder it loads unpacked (whoever can write that folder already has the same local
+// access as typing the address). Never on a store or site install. A value stored from the popup, even empty, wins.
+const DEFAULTS = { enabled: true };
+const LOCAL_BRIDGE_URL = /^ws:\/\/(127\.0\.0\.1|localhost):[0-9]{2,5}\/bridge$/;
+const CARRIED_BRIDGE_FILE = "marshal-bridge.json";
 const GROUP_TITLE = "Marley";
 const GROUP_COLOR = "purple";
 const PING_MS = 20000;
@@ -22,9 +26,22 @@ const attached = new Set();
 
 // ---------- connection ----------
 
+async function carriedBridgeUrl() {
+  try {
+    const response = await fetch(chrome.runtime.getURL(CARRIED_BRIDGE_FILE), { cache: "no-store" });
+    if (!response.ok) return "";
+    const { bridgeUrl } = await response.json();
+    return typeof bridgeUrl === "string" ? bridgeUrl : "";
+  } catch {
+    return "";
+  }
+}
+
 async function settings() {
   const stored = { ...DEFAULTS, ...(await chrome.storage.local.get(["enabled", "bridgeUrl"])) };
-  return { ...stored, bridgeUrl: DEVELOPER_INSTALL && /^ws:\/\/(127\.0\.0\.1|localhost):[0-9]{2,5}\/bridge$/.test(stored.bridgeUrl ?? "") ? stored.bridgeUrl : "" };
+  if (!DEVELOPER_INSTALL) return { ...stored, bridgeUrl: "" };
+  const bridgeUrl = typeof stored.bridgeUrl === "string" ? stored.bridgeUrl : await carriedBridgeUrl();
+  return { ...stored, bridgeUrl: LOCAL_BRIDGE_URL.test(bridgeUrl) ? bridgeUrl : "" };
 }
 
 let connecting = null;

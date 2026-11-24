@@ -24,10 +24,20 @@ const APP_INPUTS = {
     description:
       'With on:"app": the app, by bundle id (com.apple.TextEdit) or name (TextEdit). Started in the background when not running, and quit afterwards.',
   },
+  pid: {
+    type: 'integer',
+    description:
+      'With on:"app": one running copy of the app by process id (when several run, e.g. a test Chrome beside the person\'s). Without it a copy started by automation (headless, a Marshal browser profile) is never picked.',
+  },
   allowRealInput: {
     type: 'boolean',
     description:
-      'With on:"app": may a step bring the app to the front or use real keyboard/mouse input when Accessibility alone cannot do it? Default false: such a step stops with needs_input (real_input_required).',
+      'With on:"app": may a step send real keyboard/mouse events when Accessibility alone cannot do it? They go to the app in the background: it stays behind, the pointer does not move, and the person keeps working. Default false: such a step stops with needs_input (real_input_required).',
+  },
+  allowForeground: {
+    type: 'boolean',
+    description:
+      'With on:"app": may a step also bring the app to the front (taking the person\'s screen) when background input did not work? Default false.',
   },
   launch: {
     type: 'boolean',
@@ -566,6 +576,51 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       'browser.session.dialog',
       'Accepts or dismisses a dialog in a page of a Chrome the browser extension starts.',
       'medium',
+    ),
+  },
+  {
+    protocolVersion: '1.0.0',
+    name: 'browser.chrome.install',
+    version: '0.1.0',
+    title: "Install the Chrome extension in the person's Chrome",
+    description:
+      "macOS. Loads the Marley Chrome extension this package carries into the person's own Chrome by itself, in the background (Chrome is never brought to the front, the pointer never moves): navigates Chrome's front tab to chrome://extensions, turns on Developer mode, removes a copy with the same id from elsewhere (the Marley website's zip), Load unpacked of the carried folder, waits until it connects to this Marshal (the folder carries the bridge address, so there is no popup step), and presses Back so the person's page returns. Starts Chrome with open -g when it is not running (macOS still shows a newly started Chrome in front for about a second). Returns each step with the frontmost app before and after, and stops with a typed reason (developer_mode_blocked, open_panel_elsewhere, not_connected, ...). Use it when browser.status says the person's Chrome is not_connected. dryRun: only say what it would do.",
+    inputSchema: object({
+      dryRun: { type: 'boolean', description: 'Only find Chrome and say what would be done.' },
+      pid: {
+        type: 'integer',
+        description:
+          "A specific Chrome process (main process pid) to install into, instead of the person's regular Chrome.",
+      },
+      appPath: {
+        type: 'string',
+        description:
+          'Chrome.app to start when none runs (default /Applications/Google Chrome.app).',
+      },
+      connectTimeoutMs: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: 120000,
+        description:
+          'How long to wait for the extension to connect after loading it (default 40000).',
+      },
+    }),
+    outputSchema: object({
+      ...OK_ERROR,
+      status: { enum: ['installed', 'already_installed', 'planned', 'stopped'] },
+      reason: { type: 'string' },
+      folder: { type: ['string', 'null'] },
+      extensionId: { type: 'string' },
+      chrome: { type: 'object' },
+      existing: { type: 'object' },
+      steps: { type: 'array' },
+      chromeCameForward: { type: 'boolean' },
+      userBrowser: { type: 'object' },
+    }),
+    permissions: permission(
+      'browser.chrome.install',
+      "Changes the person's own Chrome: turns on Developer mode, may remove another copy of the Marley extension (same id), and loads the carried Marley extension unpacked, which then lets this Marshal drive tabs in its Marley tab group.",
+      'high',
     ),
   },
   ...LIFECYCLE_DESCRIPTORS,

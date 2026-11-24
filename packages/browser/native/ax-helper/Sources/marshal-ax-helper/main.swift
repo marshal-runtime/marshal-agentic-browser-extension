@@ -132,6 +132,26 @@ func handleSnapshot(_ request: [String: Any]) -> [String: Any] {
     }
   }
 
+  // Chromium fills a web page's tree lazily: on the first read of a fresh window the page is an empty AXWebArea while
+  // the browser's own toolbar already counts as plenty of elements, so the wait above never ran (live 2026-11-24).
+  // A Chromium-based app (Chrome, Edge, Electron) shows no web area at all until its tree is built, a few seconds
+  // after the first Accessibility read, so its first snapshot waits for one.
+  func pageMissing() -> Bool {
+    current.0.webAreas.isEmpty
+      ? isFirstSnapshot && Apps.isChromiumBased(app)
+      : current.0.webAreas.allSatisfy({ AXAttr.children($0).isEmpty })
+  }
+  if pageMissing() {
+    for webArea in current.0.webAreas { setManualAccessibility(webArea, label: "empty webArea", pid: resolvedPid) }
+    var elapsedMs = 0
+    while elapsedMs < 4_000, pageMissing() {
+      Thread.sleep(forTimeInterval: 0.2)
+      elapsedMs += 200
+      if let polled = walkOnce(appElement) { current = polled }
+    }
+    log("pid=\(resolvedPid) empty web area wait \(elapsedMs)ms")
+  }
+
   let (result, win) = current
   let text = Snapshot.visibleText(result.textParts)
   let focused = Snapshot.focusedField(appElement: appElement)
@@ -211,18 +231,42 @@ func region(of frame: CGRect, in windowFrame: CGRect) -> String {
 }
 
 func outcomeResponse(_ id: Any?, _ outcome: Actions.Outcome, failure: String) -> [String: Any] {
-  if outcome.ok { return okResponse(id, ["realInput": outcome.realInput]) }
+  if outcome.ok {
+    var payload: [String: Any] = ["realInput": outcome.realInput]
+    if let detail = outcome.detail { payload["detail"] = detail }
+    return okResponse(id, payload)
+  }
   var out = errorResponse(id, outcome.detail ?? failure)
   if outcome.needsRealInput { out["needsRealInput"] = true }
   return out
 }
 
+/// Ops that act on the target app. In background mode an action must never bring the target forward; if the target
+/// came to the front anyway, the response says so (targetCameForward) so the caller treats it as a bug.
+let actingOps: Set<String> = ["press", "setValue", "confirm", "clickAt", "keys"]
+
 func handleRequest(_ request: [String: Any]) -> [String: Any] {
+  let op = request["op"] as? String ?? ""
+  guard actingOps.contains(op), let pid = request["pid"] as? Int, request["allowForeground"] as? Bool != true else {
+    return dispatch(request)
+  }
+  let before = Background.frontmostApplication()
+  var response = dispatch(request)
+  guard let before, before.processIdentifier != pid_t(pid) else { return response }
+  if Background.targetCameForward(target: pid_t(pid)) { response["targetCameForward"] = true }
+  return response
+}
+
+func dispatch(_ request: [String: Any]) -> [String: Any] {
   let id = request["id"]
   guard let op = request["op"] as? String else {
     return errorResponse(id, "missing \"op\"")
   }
   let allowRealInput = request["allowRealInput"] as? Bool ?? false
+  // allowRealInput: real key/mouse events posted to the app in the background. allowForeground: the app may also be
+  // brought to the front (it takes the person's screen), a separate opt-in.
+  let allowForeground = request["allowForeground"] as? Bool ?? false
+  let policy = Actions.InputPolicy(background: allowRealInput, foreground: allowForeground)
   let pid = request["pid"] as? Int
   switch op {
   case "permissions":
@@ -236,8 +280,8 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     let quit = Apps.quit(pid: pid)
     return quit.found ? okResponse(id, ["exited": quit.exited]) : errorResponse(id, "no running app with that pid")
   case "focus":
-    // Bringing an app to the front is real input: only with the caller's permission.
-    guard allowRealInput else { return errorResponse(id, "focus brings the app to the front: real input not allowed") }
+    // Bringing an app to the front takes the person's screen: only with the foreground opt-in.
+    guard allowForeground else { return errorResponse(id, "focus brings the app to the front: foreground not allowed") }
     let result = Apps.focusAndEnsureWindow(bundleId: request["bundleId"] as? String, pid: pid)
     guard result.ok else { return errorResponse(id, "could not focus app") }
     var payload: [String: Any] = ["reopened": result.reopened]
@@ -247,6 +291,10 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
       payload["window"] = NSNull()
     }
     return okResponse(id, payload)
+  case "find":
+    return Find.handle(request, cache: cache)
+  case "read":
+    return Find.read(request, cache: cache)
   case "snapshot":
     return handleSnapshot(request)
   case "press", "setValue", "confirm":
@@ -255,13 +303,13 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     guard let element = cache.resolve(nodeId) else { return errorResponse(id, "unknown element \(nodeId)") }
     switch op {
     case "press":
-      return outcomeResponse(id, Actions.press(element, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "press failed")
+      return outcomeResponse(id, Actions.press(element, policy: policy, pid: pid_t(pid)), failure: "press failed")
     case "confirm":
-      return outcomeResponse(id, Actions.confirm(element, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "confirm failed")
+      return outcomeResponse(id, Actions.confirm(element, policy: policy, pid: pid_t(pid)), failure: "confirm failed")
     default:
       guard let text = request["text"] as? String else { return errorResponse(id, "missing \"text\"") }
       return outcomeResponse(
-        id, Actions.setValue(element, text: text, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "setValue failed")
+        id, Actions.setValue(element, text: text, policy: policy, pid: pid_t(pid)), failure: "setValue failed")
     }
   case "clickAt":
     // A point with no Accessibility element behind it (an OCR-only target): only a real click can reach it.
@@ -269,13 +317,45 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     guard let x = (request["x"] as? NSNumber)?.doubleValue, let y = (request["y"] as? NSNumber)?.doubleValue else {
       return errorResponse(id, "missing \"x\"/\"y\"")
     }
-    guard allowRealInput else {
-      var out = errorResponse(id, "the target has no Accessibility element: only a real click reaches it")
-      out["needsRealInput"] = true
+    return outcomeResponse(
+      id, Actions.clickOutcome(at: CGPoint(x: x, y: y), policy: policy, pid: pid_t(pid)),
+      failure: "the target has no Accessibility element: only a real click reaches it")
+  case "keys":
+    // Keys posted to one app in the background: never activates it. The caller asked for exactly this, so it needs
+    // no allowRealInput flag; the response says which app was in front before and after.
+    guard let pid else { return errorResponse(id, "missing \"pid\"") }
+    guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
+    guard let keys = request["keys"] as? [[String: Any]], !keys.isEmpty else { return errorResponse(id, "missing \"keys\"") }
+    // Shortcuts that make the app activate itself (Background.raisesApp) are never sent in the background.
+    if !allowForeground,
+      let index = keys.firstIndex(where: { Background.raisesApp(name: $0["name"] as? String ?? "", modifiers: $0["modifiers"] as? [String] ?? []) })
+    {
+      var out = errorResponse(id, "keys[\(index)] brings the app to the front when sent: it needs allowForeground")
+      out["needsForeground"] = true
       return out
     }
-    Actions.activate(pid: pid_t(pid))
-    return okResponse(id, ["realInput": Actions.click(at: CGPoint(x: x, y: y))])
+    let before = Background.frontmostBundleId()
+    for (index, entry) in keys.enumerated() {
+      let name = entry["name"] as? String ?? ""
+      let modifiers = entry["modifiers"] as? [String] ?? []
+      guard Background.key(pid: pid_t(pid), name: name, modifiers: modifiers) else {
+        var out = errorResponse(id, "unknown key \"\(name)\" at keys[\(index)]")
+        out["frontmostBefore"] = before
+        out["frontmostAfter"] = Background.frontmostBundleId()
+        return out
+      }
+    }
+    return okResponse(id, ["frontmostBefore": before, "frontmostAfter": Background.frontmostBundleId()])
+  case "typeText":
+    guard let pid else { return errorResponse(id, "missing \"pid\"") }
+    guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
+    guard let text = request["text"] as? String else { return errorResponse(id, "missing \"text\"") }
+    let before = Background.frontmostBundleId()
+    let typed = Background.type(pid: pid_t(pid), text: text)
+    var out = typed ? okResponse(id, [:]) : errorResponse(id, "could not create key events")
+    out["frontmostBefore"] = before
+    out["frontmostAfter"] = Background.frontmostBundleId()
+    return out
   case "scroll":
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     guard let win = Snapshot.window(for: AXUIElementCreateApplication(pid_t(pid))) else {
@@ -283,7 +363,7 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     }
     let down = (request["direction"] as? String ?? "down") != "up"
     return outcomeResponse(
-      id, Actions.scroll(window: win.element, down: down, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "scroll failed")
+      id, Actions.scroll(window: win.element, down: down, policy: policy, pid: pid_t(pid)), failure: "scroll failed")
   case "screenshot":
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     do {
@@ -334,6 +414,9 @@ if CommandLine.arguments.contains("--selftest") {
   exit(0)
 }
 
+// A bounded wait for any app's Accessibility answer (the default is about 6 s per call, and a press behind a modal
+// was seen to block 60 s+). Set on the system-wide element, it applies to every element this helper reads.
+AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 4.0)
 log("marshal-ax-helper started, pid=\(ProcessInfo.processInfo.processIdentifier)")
 while let line = readLine(strippingNewline: true) {
   guard !line.isEmpty else { continue }

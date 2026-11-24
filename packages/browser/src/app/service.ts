@@ -84,7 +84,13 @@ export interface AppReadiness {
     readonly screenRecording: Permission;
   };
   readonly screenLocked?: boolean;
-  readonly runningApps?: readonly { name: string; bundleId: string; pid: number }[];
+  readonly runningApps?: readonly {
+    name: string;
+    bundleId: string;
+    pid: number;
+    /** A copy started by automation (headless, a debugging pipe, a Marshal browser profile): never picked by name. */
+    automation?: boolean;
+  }[];
 }
 
 interface Permission {
@@ -219,6 +225,7 @@ export class AppService {
         name: String(app['name']),
         bundleId: String(app['bundleId']),
         pid: Number(app['pid']),
+        ...(app['automation'] === true ? { automation: true } : {}),
       };
     });
     const reason = !accessibility.granted
@@ -250,17 +257,42 @@ export class AppService {
     args: Record<string, unknown>,
   ): Promise<{ app: AppIdentity; launched: boolean } | { stop: string; error: string }> {
     const name = typeof args['app'] === 'string' ? args['app'].trim() : '';
-    if (!name)
-      return { stop: 'app_required', error: 'on:"app" needs app: a bundle id or app name' };
+    const pid =
+      typeof args['pid'] === 'number' && Number.isInteger(args['pid']) ? args['pid'] : undefined;
+    if (!name && pid === undefined)
+      return {
+        stop: 'app_required',
+        error: 'on:"app" needs app: a bundle id or app name (or pid)',
+      };
     const readiness = await this.readiness();
     if (!readiness.ready)
       return { stop: readiness.reason ?? 'app_backend_unavailable', error: readiness.detail };
     const bundleLike = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(name);
     const lower = name.toLowerCase();
-    const running = (readiness.runningApps ?? []).find((app) =>
-      bundleLike ? app.bundleId === name : app.name.toLowerCase() === lower,
+    const named = (app: { name: string; bundleId: string }): boolean =>
+      !name || (bundleLike ? app.bundleId === name : app.name.toLowerCase() === lower);
+    if (pid !== undefined) {
+      // An explicit pid picks that one copy, automation copies included (a test drives its own Chrome this way).
+      const byPid = (readiness.runningApps ?? []).find((app) => app.pid === pid);
+      if (!byPid || !named(byPid))
+        return {
+          stop: 'app_not_running',
+          error: `no running app${name ? ` ${name}` : ''} with pid ${String(pid)}`,
+        };
+      return {
+        app: { pid: byPid.pid, bundleId: byPid.bundleId, name: byPid.name },
+        launched: false,
+      };
+    }
+    // Copies started by automation (a headless Chrome, a test runner's profile) are never the person's app.
+    const running = (readiness.runningApps ?? []).find(
+      (app) => app.automation !== true && named(app),
     );
-    if (running) return { app: running, launched: false };
+    if (running)
+      return {
+        app: { pid: running.pid, bundleId: running.bundleId, name: running.name },
+        launched: false,
+      };
     if (args['launch'] === false)
       return { stop: 'app_not_running', error: `${name} is not running and launch is false` };
     const launched = await this.ax().call(
@@ -290,6 +322,7 @@ export class AppService {
       ax: this.ax(),
       ...(ocr ? { ocr } : {}),
       allowRealInput: args['allowRealInput'] === true,
+      allowForeground: args['allowForeground'] === true,
       ...(this.deps.sleep ? { sleep: this.deps.sleep } : {}),
     });
     const session: AppSession = {

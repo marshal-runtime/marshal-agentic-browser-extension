@@ -18,7 +18,8 @@ enum Apps {
   }
 
   static func list() -> [[String: Any]] {
-    NSWorkspace.shared.runningApplications
+    let front = Background.frontmostApplication()?.processIdentifier
+    return NSWorkspace.shared.runningApplications
       .filter { $0.activationPolicy == .regular }
       .compactMap { app -> [String: Any]? in
         guard let bundleId = app.bundleIdentifier, let name = app.localizedName else { return nil }
@@ -26,7 +27,8 @@ enum Apps {
           "bundleId": bundleId,
           "name": name,
           "pid": Int(app.processIdentifier),
-          "frontmost": app.isActive,
+          "frontmost": app.processIdentifier == front,
+          "automation": isAutomationInstance(app),
         ]
       }
   }
@@ -35,9 +37,10 @@ enum Apps {
   /// front). `alreadyRunning` tells the caller the process was not started here, so it must not be quit here either.
   static func launch(bundleId: String?, name: String?) -> [String: Any] {
     let lowerName = name?.lowercased()
-    if let running = NSWorkspace.shared.runningApplications.first(where: {
+    let matching = NSWorkspace.shared.runningApplications.filter {
       (bundleId != nil && $0.bundleIdentifier == bundleId) || (lowerName != nil && $0.localizedName?.lowercased() == lowerName)
-    }) {
+    }
+    if let running = personInstance(among: matching) {
       return describe(running, alreadyRunning: true)
     }
     var url: URL? = bundleId.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
@@ -74,7 +77,8 @@ enum Apps {
   private static func describe(_ app: NSRunningApplication, alreadyRunning: Bool) -> [String: Any] {
     [
       "found": true, "alreadyRunning": alreadyRunning, "pid": Int(app.processIdentifier),
-      "bundleId": app.bundleIdentifier ?? "", "name": app.localizedName ?? "", "frontmost": app.isActive,
+      "bundleId": app.bundleIdentifier ?? "", "name": app.localizedName ?? "",
+      "frontmost": app.processIdentifier == Background.frontmostApplication()?.processIdentifier,
     ]
   }
 
@@ -91,13 +95,91 @@ enum Apps {
   }
 
   static func resolve(bundleId: String?, pid: Int?) -> NSRunningApplication? {
-    if let pid, let app = NSRunningApplication(processIdentifier: pid_t(pid)) {
-      return app
+    if let pid {
+      // A named pid never falls back to another app (the frontmost one) when it can't be found.
+      // NSRunningApplication(processIdentifier:) returned nil for a running TextEdit the workspace list had (live
+      // 2026-11-24), so the list is the fallback.
+      return NSRunningApplication(processIdentifier: pid_t(pid))
+        ?? NSWorkspace.shared.runningApplications.first { $0.processIdentifier == pid_t(pid) }
     }
     if let bundleId {
-      return NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+      return personInstance(among: NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId })
     }
-    return NSWorkspace.shared.frontmostApplication
+    return Background.frontmostApplication()
+  }
+
+  /// Among running copies of one app, the one the person uses. A browser automation layer (this extension's managed
+  /// Chrome, a test runner's) starts extra copies of the same bundle: headless, or on a profile folder of its own.
+  /// Those are never picked, so on:"app" with "Google Chrome" reaches the person's Chrome and not a headless one
+  /// (live 2026-11-24: the headless agent Chrome was picked over the person's). Among the rest, one with an
+  /// on-screen window wins.
+  static func personInstance(among candidates: [NSRunningApplication]) -> NSRunningApplication? {
+    let people = candidates.filter { !isAutomationInstance($0) }
+    let onScreen = Set(
+      (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? [])
+        .filter { ($0[kCGWindowLayer as String] as? Int ?? 0) == 0 }
+        .compactMap { $0[kCGWindowOwnerPID as String] as? Int })
+    return people.first { onScreen.contains(Int($0.processIdentifier)) } ?? people.first
+  }
+
+  /// Chromium-based by the framework its bundle ships: Electron apps carry "Electron Framework.framework"; Chrome,
+  /// Edge, Brave and Arc carry "<name> Framework.framework" with Chromium's helper apps in its Helpers folder.
+  static func isChromiumBased(_ app: NSRunningApplication) -> Bool {
+    guard let bundle = app.bundleURL else { return false }
+    let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks.path)) ?? []
+    return names.contains { name in
+      if name == "Electron Framework.framework" { return true }
+      guard name.hasSuffix(" Framework.framework") else { return false }
+      let framework = frameworks.appendingPathComponent(name)
+      return FileManager.default.fileExists(atPath: framework.appendingPathComponent("Helpers").path)
+        || FileManager.default.fileExists(atPath: framework.appendingPathComponent("Versions/Current/Helpers").path)
+    }
+  }
+
+  static func isAutomationInstance(_ app: NSRunningApplication) -> Bool {
+    if app.activationPolicy == .prohibited { return true }
+    return isAutomationCommandLine(processArguments(pid: app.processIdentifier))
+  }
+
+  /// A command line that marks a copy started by automation: headless, driven over a debugging pipe or port, or on a
+  /// profile folder under ~/.marshal/browser or a temporary marshal-browser-* folder.
+  static func isAutomationCommandLine(_ args: [String]) -> Bool {
+    let marshalBrowser = (NSHomeDirectory() as NSString).appendingPathComponent(".marshal/browser")
+    for arg in args {
+      if arg == "--headless" || arg.hasPrefix("--headless=") || arg == "--remote-debugging-pipe"
+        || arg.hasPrefix("--remote-debugging-port")
+      {
+        return true
+      }
+      if arg.hasPrefix("--user-data-dir=") {
+        let dir = String(arg.dropFirst("--user-data-dir=".count))
+        if dir.hasPrefix(marshalBrowser) || (dir as NSString).lastPathComponent.hasPrefix("marshal-browser-") { return true }
+      }
+    }
+    return false
+  }
+
+  /// argv of another process (KERN_PROCARGS2), or [] when it can't be read.
+  static func processArguments(pid: pid_t) -> [String] {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > 4 else { return [] }
+    let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+    var index = 4
+    // Executable path, then NUL padding, then argc NUL-terminated strings.
+    while index < size, buffer[index] != 0 { index += 1 }
+    while index < size, buffer[index] == 0 { index += 1 }
+    var args: [String] = []
+    while args.count < Int(argc), index < size {
+      let start = index
+      while index < size, buffer[index] != 0 { index += 1 }
+      args.append(String(decoding: buffer[start..<index], as: UTF8.self))
+      index += 1
+    }
+    return args
   }
 
   @discardableResult

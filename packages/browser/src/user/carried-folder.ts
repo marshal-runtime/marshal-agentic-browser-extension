@@ -56,6 +56,28 @@ function refuseLinks(target: string): void {
       throw new Error(`${entry} is a symbolic link`);
 }
 
+/** The file in the loaded folder the Marley extension (0.5.1+) reads its default local bridge address from. */
+export const BRIDGE_FILE = 'marshal-bridge.json';
+
+/**
+ * Writes `marshal-bridge.json` ({bridgeUrl}) into the folder Chrome loads, so an unpacked install connects to this
+ * Marshal's bridge with no popup step (the extension ignores it on store and site installs, and a value typed in its
+ * popup wins). Not part of the lock: it names this machine's port. Returns why it could not be written, or undefined.
+ */
+export function writeBridgeFile(folder: string, bridgeUrl: string): string | undefined {
+  try {
+    const file = path.join(folder, BRIDGE_FILE);
+    if (existsSync(file) && lstatSync(file).isSymbolicLink())
+      throw new Error(`${file} is a symbolic link`);
+    const body = `${JSON.stringify({ bridgeUrl })}\n`;
+    if (existsSync(file) && readFileSync(file, 'utf8') === body) return undefined;
+    writeFileSync(file, body, { mode: 0o644 });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /**
  * Copies the carried folder (`source`, with `chrome-extension.lock.json` beside it) to `target` unless it already
  * matches. Returns the folder setup should name.

@@ -8,8 +8,17 @@ import path from 'node:path';
 import { BrowserService, type BrowserConfiguration } from './capabilities.js';
 import type { RuntimeExtensionActivation, RuntimeExtensionActivationContext } from './contracts.js';
 import { createHostDecider } from './engine/decider.js';
-import { DEFAULT_CHROME_EXTENSION_DIR, installCarriedExtension } from './user/carried-folder.js';
-import { BRIDGE_PORT, createLocalBridgeClient, LocalBridge } from './user/local-bridge.js';
+import {
+  DEFAULT_CHROME_EXTENSION_DIR,
+  installCarriedExtension,
+  writeBridgeFile,
+} from './user/carried-folder.js';
+import {
+  BRIDGE_PORT,
+  bridgeUrlFor,
+  createLocalBridgeClient,
+  LocalBridge,
+} from './user/local-bridge.js';
 import { carriedExtension } from './user/status.js';
 import { createWatchApplication } from './watch/app.js';
 
@@ -27,7 +36,9 @@ export async function activate(
   );
   // Only the carried extension (its fixed id) may connect to the bridge. A port that is taken is reported by
   // browser.status (port_in_use) and retried; activation never fails on it.
-  const bridge = new LocalBridge(configuration.bridgePort ?? BRIDGE_PORT, {
+  const bridgePort = configuration.bridgePort ?? BRIDGE_PORT;
+  if (carried.folder) writeBridgeFile(carried.folder, bridgeUrlFor(bridgePort));
+  const bridge = new LocalBridge(bridgePort, {
     ...(carried.extensionId ? { extensionId: carried.extensionId } : {}),
   });
   await bridge.start();
