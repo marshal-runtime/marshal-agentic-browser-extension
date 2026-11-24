@@ -27,6 +27,7 @@ enum Apps {
           "name": name,
           "pid": Int(app.processIdentifier),
           "frontmost": app.isActive,
+          "automation": isAutomationInstance(app),
         ]
       }
   }

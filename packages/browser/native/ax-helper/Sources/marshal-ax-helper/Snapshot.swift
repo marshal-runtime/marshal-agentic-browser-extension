@@ -222,7 +222,15 @@ enum Snapshot {
         }
       }
     } else if role == "AXGroup" {
-      // Nameless groups are transparent: recurse but never emit themselves.
+      // Nameless groups are transparent: recurse but never emit themselves. A group that takes AXPress is a clickable
+      // element of a web page (Chromium exposes a div with a click handler this way): offered, so it is pressed
+      // through Accessibility in the background instead of needing a real click (Chromium drops mouse events posted
+      // to it while it is behind other apps).
+      if AXAttr.actionNames(element).contains(kAXPressAction as String),
+        let node = build(element, role: role, cache: cache, windowFrame: windowFrame, dialog: context), !node.offscreen
+      {
+        result.onScreen.append(node)
+      }
     }
 
     for child in AXAttr.children(element) {
@@ -248,9 +256,11 @@ enum Snapshot {
       ? (AXAttr.string(element, kAXTitleAttribute as String) ?? AXAttr.string(element, kAXDescriptionAttribute as String)
         ?? AXAttr.string(element, "AXPlaceholderValue") ?? "")
       : (AXAttr.label(element) ?? "")
-    if label.isEmpty, role == "AXCell" || role == "AXRow" {
+    if label.isEmpty, role == "AXCell" || role == "AXRow" || role == "AXGroup" {
       label = shallowStaticTextLabel(element) ?? ""
     }
+    // A clickable group with no text of its own is not worth offering under a made-up name.
+    if label.isEmpty, role == "AXGroup" { return nil }
     // Icon-only controls (Chromium/Electron toolbar buttons with no
     // AXTitle/AXDescription - observed on Claude Desktop's window-chrome
     // buttons) are kept even with no accessible name: a synthesized,
@@ -292,6 +302,19 @@ enum Snapshot {
       checked: checked, expanded: expanded, selected: selected, frame: frame, offscreen: offscreen,
       actions: actions, subrole: subrole, secure: secure, ownerSignal: ownerSignal
     )
+  }
+
+  /// Whether a web page is shown in `window` (a bounded breadth-first look for an AXWebArea).
+  static func containsWebArea(_ window: AXUIElement) -> Bool {
+    var queue = AXAttr.children(window)
+    var visited = 0
+    while !queue.isEmpty, visited < 400 {
+      let node = queue.removeFirst()
+      visited += 1
+      if AXAttr.role(node) == "AXWebArea" { return true }
+      queue.append(contentsOf: AXAttr.children(node))
+    }
+    return false
   }
 
   private static func humanizedRole(_ role: String) -> String {
