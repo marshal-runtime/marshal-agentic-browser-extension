@@ -113,11 +113,13 @@ enum Actions {
   /// "Press Enter" in a field: AXConfirm, else a Return key posted to the app in the background, else (foreground
   /// opt-in only) a real Return with the app in front.
   static func confirm(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
-    // A web page's field answers AXConfirm with success and does nothing (Chromium, live 2026-11-24): there Enter is
-    // only ever a key, so the field is focused and Return goes to the app in the background.
-    if isInWebArea(element) {
+    // Chromium answers AXConfirm with success and does nothing, in a web page's field and in its own address bar
+    // (live 2026-11-24): there Enter is only ever a key, so the field is focused and Return goes to the app in the
+    // background.
+    let chromium = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == pid }.map(Apps.isChromiumBased) ?? false
+    if chromium || isInWebArea(element) {
       guard policy.background || policy.foreground else {
-        return Outcome(ok: false, needsRealInput: true, detail: "Enter in a web page field needs a real Return key")
+        return Outcome(ok: false, needsRealInput: true, detail: "Enter in this field needs a real Return key")
       }
       _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
       Thread.sleep(forTimeInterval: 0.05)
