@@ -25,6 +25,9 @@ import { HEALTH_SERVICE, startWsServer, type WsConnection } from './ws-server.js
 export const BRIDGE_PORT = 17373;
 const PATH = '/bridge';
 const HOST = '127.0.0.1';
+
+/** The address the Chrome extension connects to for a bridge on `port`. */
+export const bridgeUrlFor = (port: number): string => `ws://${HOST}:${String(port)}${PATH}`;
 const REQUEST_TIMEOUT_MS = 30_000;
 const IDLE_TIMEOUT_MS = 65_000;
 const REBIND_EVERY_MS = 2_000;

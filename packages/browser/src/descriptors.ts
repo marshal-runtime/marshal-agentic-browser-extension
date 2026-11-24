@@ -568,5 +568,48 @@ export const DESCRIPTORS: readonly CapabilityDescriptor[] = [
       'medium',
     ),
   },
+  {
+    protocolVersion: '1.0.0',
+    name: 'browser.chrome.install',
+    version: '0.1.0',
+    title: "Install the Chrome extension in the person's Chrome",
+    description:
+      "macOS. Loads the Marley Chrome extension this package carries into the person's own Chrome by itself, in the background (Chrome is never brought to the front, the pointer never moves): opens chrome://extensions in a background tab, turns on Developer mode, removes a copy with the same id from elsewhere (the Marley website's zip), Load unpacked of the carried folder, and waits until it connects to this Marshal (the folder carries the bridge address, so there is no popup step). Starts Chrome in the background when it is not running. Returns each step with the frontmost app before and after, and stops with a typed reason (developer_mode_blocked, open_panel_elsewhere, not_connected, ...). Use it when browser.status says the person's Chrome is not_connected. dryRun: only say what it would do.",
+    inputSchema: object({
+      dryRun: { type: 'boolean', description: 'Only find Chrome and say what would be done.' },
+      pid: {
+        type: 'integer',
+        description:
+          'A specific Chrome process (main process pid) to install into, instead of the person\'s regular Chrome.',
+      },
+      appPath: {
+        type: 'string',
+        description: 'Chrome.app to start when none runs (default /Applications/Google Chrome.app).',
+      },
+      connectTimeoutMs: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: 120000,
+        description: 'How long to wait for the extension to connect after loading it (default 40000).',
+      },
+    }),
+    outputSchema: object({
+      ...OK_ERROR,
+      status: { enum: ['installed', 'already_installed', 'planned', 'stopped'] },
+      reason: { type: 'string' },
+      folder: { type: ['string', 'null'] },
+      extensionId: { type: 'string' },
+      chrome: { type: 'object' },
+      existing: { type: 'object' },
+      steps: { type: 'array' },
+      chromeCameForward: { type: 'boolean' },
+      userBrowser: { type: 'object' },
+    }),
+    permissions: permission(
+      'browser.chrome.install',
+      "Changes the person's own Chrome: turns on Developer mode, may remove another copy of the Marley extension (same id), and loads the carried Marley extension unpacked, which then lets this Marshal drive tabs in its Marley tab group.",
+      'high',
+    ),
+  },
   ...LIFECYCLE_DESCRIPTORS,
 ];

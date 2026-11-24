@@ -29,7 +29,13 @@ import { DECISION_SHOT, type ManagedProfile, type Shot, type TargetAction } from
 import type { BridgeClient } from './user/bridge.js';
 import { triageGoal, type Triage } from './engine/triage.js';
 import { routeTask } from './user/routing.js';
-import { userBrowserStatus, UserNotPaired } from './user/status.js';
+import { carriedExtension, userBrowserStatus, UserNotPaired } from './user/status.js';
+import {
+  installChromeExtension,
+  realInstallDeps,
+  type ChromeInstallResult,
+} from './user/chrome-install.js';
+import { AxHelperClient, resolveAxHelperPath } from './app/ax-helper-client.js';
 import * as sessionOps from './session-ops.js';
 import { MODIFIERS, PRESS_KEYS, type Modifier, type PressKey } from './target.js';
 import { UserTab } from './user/tab.js';
@@ -71,6 +77,8 @@ export class BrowserService {
   private readonly sweeper: ReturnType<typeof setInterval>;
   /** The `app` backend (native macOS apps): owns every `on: "app"` call and every app session id. */
   private readonly apps: AppService;
+  /** The AX helper browser.chrome.install drives Chrome with (started on first use). */
+  private installHelper: AxHelperClient | undefined;
   /** Task lifecycle, live view and recording (src/lifecycle.ts). */
   readonly lifecycle: Lifecycle;
 
@@ -124,6 +132,38 @@ export class BrowserService {
     await Promise.all(all.map((session) => session.tab.close().catch(() => undefined)));
     await this.launcher.closeAll();
     await this.apps.dispose();
+    await this.installHelper?.dispose();
+  }
+
+  /** browser.chrome.install: the carried Chrome extension into the person's Chrome, in the background. */
+  private async installChrome(
+    args: Record<string, unknown>,
+    bridge: BridgeClient | undefined,
+  ): Promise<ChromeInstallResult> {
+    this.installHelper ??= new AxHelperClient({
+      binaryPath: resolveAxHelperPath(defaultPackageRoot(), this.configuration.axHelperPath),
+      callTimeoutMs: 20_000,
+    });
+    const helper = this.installHelper;
+    const integer = (key: string): number | undefined =>
+      typeof args[key] === 'number' && Number.isInteger(args[key]) ? (args[key] as number) : undefined;
+    const pid = integer('pid');
+    const connectTimeoutMs = integer('connectTimeoutMs');
+    return installChromeExtension(
+      bridge?.carried ?? carriedExtension(),
+      {
+        ...(args['dryRun'] === true ? { dryRun: true } : {}),
+        ...(pid !== undefined ? { pid } : {}),
+        ...(typeof args['appPath'] === 'string' ? { appPath: args['appPath'] } : {}),
+        ...(connectTimeoutMs !== undefined
+          ? { connectTimeoutMs: Math.min(120_000, Math.max(1_000, connectTimeoutMs)) }
+          : {}),
+      },
+      realInstallDeps(
+        (request) => helper.call(request),
+        () => userBrowserStatus(bridge),
+      ),
+    );
   }
 
   async invoke(
@@ -141,11 +181,13 @@ export class BrowserService {
       if (this.lifecycle.handles(name))
         return { output: await this.lifecycle.invoke(name, args, context) };
       const forApp = args['on'] === 'app' || this.apps.owns(args['sessionId']);
-      if (forApp && name !== 'browser.status')
+      if (forApp && name !== 'browser.status' && name !== 'browser.chrome.install')
         return { output: await this.invokeApp(name, args, decider) };
       switch (name) {
         case 'browser.status':
           return { output: await this.status(decider, bridge) };
+        case 'browser.chrome.install':
+          return { output: await this.installChrome(args, bridge) };
         case 'browser.session.open':
           return { output: await this.open(args, bridge) };
         case 'browser.session.snapshot':

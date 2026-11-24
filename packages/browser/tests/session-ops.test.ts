@@ -280,8 +280,8 @@ describe("setup: how to connect the person's Chrome", () => {
     expect(setup.chromeExtension).toMatchObject({
       repository: 'https://github.com/zyg-edge/marley-browser-extension',
       install: 'developer (Load unpacked)',
-      version: '0.5.0',
-      commit: '48cf63fb02b6533750bd114a7ae381cff2ce839b',
+      version: '0.5.1',
+      commit: '21c1e1575fe85bfec8bb22bb501214de692e733a',
     });
     expect(setup.otherInstalls).toMatch(/Chrome Web Store/);
     expect(setup.otherInstalls).toMatch(/never to Marshal/);

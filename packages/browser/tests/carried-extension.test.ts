@@ -35,7 +35,7 @@ const lock = JSON.parse(
   files: Record<string, string>;
   treeSha256: string;
 };
-const PINNED = '48cf63fb02b6533750bd114a7ae381cff2ce839b';
+const PINNED = '21c1e1575fe85bfec8bb22bb501214de692e733a';
 
 /** A test of build output fails with this reason, not a confusing one, on a checkout that was not built. */
 function built(folder: string): string {
@@ -59,13 +59,13 @@ function noLinks(dir: string): string[] {
 }
 
 describe('carried Chrome extension', () => {
-  it('the lock pins a commit of main, developer channel, Marley 0.5.0', () => {
+  it('the lock pins a commit of main, developer channel, Marley 0.5.1', () => {
     expect(lock).toMatchObject({
       repository: 'https://github.com/zyg-edge/marley-browser-extension',
       branch: 'main',
       commit: PINNED,
       channel: 'developer',
-      version: '0.5.0',
+      version: '0.5.1',
     });
   });
 
@@ -151,7 +151,7 @@ describe('stable folder for Load unpacked (outlives updates of this package)', (
   it('copies the locked files once, names the copy, and leaves an unchanged copy untouched', () => {
     const target = fresh();
     const carried = installCarriedExtension(source, target);
-    expect(carried).toEqual({ folder: target, version: '0.5.0', commit: PINNED });
+    expect(carried).toEqual({ folder: target, version: '0.5.1', commit: PINNED });
     expect((hashTree(target) as { treeSha256: string }).treeSha256).toBe(lock.treeSha256);
     const before = statSync(path.join(target, 'background.js')).mtimeMs;
     const inode = statSync(target).ino;

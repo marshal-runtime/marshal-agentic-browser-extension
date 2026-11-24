@@ -142,7 +142,7 @@ describe.skipIf(!ready)(
       ]);
     });
 
-    it('browser.status: paired with the carried Marley 0.5.0 (main has no frame forwarding, so polled screenshots)', async () => {
+    it('browser.status: paired with the carried Marley 0.5.1 (main has no frame forwarding, so polled screenshots)', async () => {
       const service = new BrowserService(
         () => new Script([]),
         {},
@@ -155,7 +155,7 @@ describe.skipIf(!ready)(
       expect(out.backends.find((backend) => backend.name === 'user')).toMatchObject({
         ready: true,
         reason: 'paired',
-        extensionVersion: '0.5.0',
+        extensionVersion: '0.5.1',
         screencast: 'polling',
       });
     });
@@ -223,7 +223,7 @@ describe.skipIf(!ready)(
               readFileSync(path.join(CARRIED, '..', 'chrome-extension.lock.json'), 'utf8'),
             ) as { commit: string }
           ).commit,
-        ).toBe('48cf63fb02b6533750bd114a7ae381cff2ce839b');
+        ).toBe('21c1e1575fe85bfec8bb22bb501214de692e733a');
       const clicked = (
         await service.invoke('browser.session.act', {
           sessionId,

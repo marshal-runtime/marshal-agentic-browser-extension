@@ -251,6 +251,10 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
       payload["window"] = NSNull()
     }
     return okResponse(id, payload)
+  case "find":
+    return Find.handle(request, cache: cache)
+  case "read":
+    return Find.read(request, cache: cache)
   case "snapshot":
     return handleSnapshot(request)
   case "press", "setValue", "confirm":
