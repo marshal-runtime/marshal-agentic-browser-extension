@@ -7,6 +7,7 @@ import ScreenCaptureKit
 private let namedKeyCodes: [String: CGKeyCode] = [
   "enter": 36, "return": 36, "escape": 53, "esc": 53, "tab": 48, "space": 49,
   "backspace": 51, "delete": 117, "left": 123, "right": 124, "down": 125, "up": 126,
+  "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
 ]
 
 enum ActionError: Error {
@@ -25,7 +26,16 @@ enum Actions {
     var detail: String? = nil
   }
 
-  static func press(_ element: AXUIElement, allowRealInput: Bool, pid: pid_t) -> Outcome {
+  /// How far a real-input path may go. Background input is posted to the app's own event queue (CGEvent.postToPid):
+  /// the app stays where it is, the pointer does not move and the person keeps typing in their own app. Foreground
+  /// input brings the app to the front and posts at the HID tap, which takes the screen: it needs its own opt-in.
+  struct InputPolicy {
+    var background: Bool
+    var foreground: Bool
+    static let none = InputPolicy(background: false, foreground: false)
+  }
+
+  static func press(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
     if AXAttr.perform(element, action: kAXPressAction as String) { return Outcome(ok: true) }
     // Rows, cells and tabs often take selection instead of AXPress.
     if AXAttr.isSettable(element, kAXSelectedAttribute as String),
@@ -33,25 +43,49 @@ enum Actions {
     {
       return Outcome(ok: true)
     }
-    guard allowRealInput else {
+    guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "the element takes no Accessibility press or selection")
     }
     guard let frame = AXAttr.frame(element) else { return Outcome(ok: false, detail: "no frame for a real click") }
-    activate(pid: pid)
-    return Outcome(ok: click(at: CGPoint(x: frame.midX, y: frame.midY)), realInput: true)
+    return clickOutcome(at: CGPoint(x: frame.midX, y: frame.midY), policy: policy, pid: pid)
   }
 
-  /// Sets a text value through Accessibility only. AXFocus moves the focus inside the target app (never brings the
-  /// app to the front) and is not required: a field that takes the value without it is fine.
-  static func setValue(_ element: AXUIElement, text: String, allowRealInput: Bool, pid: pid_t) -> Outcome {
+  /// A click at a screen point: in the background when allowed (a click there can't be read back, so it is taken as
+  /// done), else in front only with the foreground opt-in.
+  static func clickOutcome(at point: CGPoint, policy: InputPolicy, pid: pid_t) -> Outcome {
+    if policy.background {
+      return Outcome(ok: Background.click(pid: pid, at: point), realInput: true)
+    }
+    guard policy.foreground else {
+      return Outcome(ok: false, needsRealInput: true, detail: "only a real click reaches this target")
+    }
+    activate(pid: pid)
+    return Outcome(ok: click(at: point), realInput: true)
+  }
+
+  /// Sets a text value through Accessibility. AXFocus moves the focus inside the target app (never brings the app to
+  /// the front). A field that ignores the value set is typed into in the background (select all, then the text) and
+  /// read back; only when that did not land and the caller opted into the foreground is the app brought to the front.
+  static func setValue(_ element: AXUIElement, text: String, policy: InputPolicy, pid: pid_t) -> Outcome {
     AXAttr.perform(element, action: "AXFocus")
     _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
     if AXAttr.set(element, kAXValueAttribute as String, text as CFTypeRef) {
       // Some fields accept the call and ignore it: read the value back.
       if AXAttr.string(element, kAXValueAttribute as String) == text { return Outcome(ok: true) }
     }
-    guard allowRealInput else {
+    guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "the field does not take a value through Accessibility")
+    }
+    if policy.background {
+      if let frame = AXAttr.frame(element), AXAttr.bool(element, kAXFocusedAttribute as String) != true {
+        _ = Background.click(pid: pid, at: CGPoint(x: frame.midX, y: frame.midY))
+      }
+      _ = Background.key(pid: pid, name: "a", modifiers: ["cmd"])
+      _ = Background.type(pid: pid, text: text)
+      Thread.sleep(forTimeInterval: 0.1)
+      let value = AXAttr.string(element, kAXValueAttribute as String)
+      // A field that hides its value (or exposes none) can't be read back: the background typing is taken as done.
+      if value == nil || value == text || !policy.foreground { return Outcome(ok: true, realInput: true) }
     }
     guard let frame = AXAttr.frame(element) else { return Outcome(ok: false, detail: "no frame for real typing") }
     activate(pid: pid)
@@ -60,21 +94,25 @@ enum Actions {
     return Outcome(ok: type(text), realInput: true)
   }
 
-  /// "Press Enter" in a field: AXConfirm, else the default button of the field's window (a typed signal the caller
-  /// checks first), else a real Return key when allowed.
-  static func confirm(_ element: AXUIElement, allowRealInput: Bool, pid: pid_t) -> Outcome {
+  /// "Press Enter" in a field: AXConfirm, else a Return key posted to the app in the background, else (foreground
+  /// opt-in only) a real Return with the app in front.
+  static func confirm(_ element: AXUIElement, policy: InputPolicy, pid: pid_t) -> Outcome {
     if AXAttr.perform(element, action: "AXConfirm") { return Outcome(ok: true) }
-    guard allowRealInput else {
+    guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "the field has no AXConfirm action")
     }
-    activate(pid: pid)
     _ = AXAttr.set(element, kAXFocusedAttribute as String, kCFBooleanTrue)
+    if policy.background {
+      return Outcome(ok: Background.key(pid: pid, name: "return", modifiers: []), realInput: true)
+    }
+    activate(pid: pid)
     return Outcome(ok: key(name: "return", modifiers: []), realInput: true)
   }
 
-  /// Scrolls the first scroll area of `window` by moving its vertical scroll bar (Accessibility only), else a real
-  /// scroll-wheel event at the window's centre when allowed.
-  static func scroll(window: AXUIElement, down: Bool, allowRealInput: Bool, pid: pid_t) -> Outcome {
+  /// Scrolls the first scroll area of `window` by moving its vertical scroll bar (Accessibility only), else a
+  /// scroll-wheel event at the window's centre: posted to the app in the background, or in front with the
+  /// foreground opt-in.
+  static func scroll(window: AXUIElement, down: Bool, policy: InputPolicy, pid: pid_t) -> Outcome {
     if let bar = Snapshot.verticalScrollBar(in: window) {
       if AXAttr.perform(bar, action: down ? "AXIncrementPage" : "AXDecrementPage") { return Outcome(ok: true) }
       if let current = AXAttr.double(bar, kAXValueAttribute as String),
@@ -83,15 +121,19 @@ enum Actions {
         return Outcome(ok: true)
       }
     }
-    guard allowRealInput else {
+    guard policy.background || policy.foreground else {
       return Outcome(ok: false, needsRealInput: true, detail: "no scroll bar that takes an Accessibility scroll")
     }
     guard let frame = AXAttr.frame(window) else { return Outcome(ok: false, detail: "no window frame") }
+    let centre = CGPoint(x: frame.midX, y: frame.midY)
+    if policy.background {
+      return Outcome(ok: Background.wheel(pid: pid, at: centre, dy: down ? -560 : 560), realInput: true)
+    }
     activate(pid: pid)
-    return Outcome(ok: wheel(at: CGPoint(x: frame.midX, y: frame.midY), dy: down ? -560 : 560), realInput: true)
+    return Outcome(ok: wheel(at: centre, dy: down ? -560 : 560), realInput: true)
   }
 
-  /// Brings the app to the front: only ever called on a real-input path the caller allowed.
+  /// Brings the app to the front: only ever called on a foreground path the caller opted into.
   static func activate(pid: pid_t) {
     NSRunningApplication(processIdentifier: pid)?.activate(options: [])
     Thread.sleep(forTimeInterval: 0.15)
@@ -152,12 +194,29 @@ enum Actions {
     return true
   }
 
+  static func keyCode(for name: String) -> CGKeyCode? {
+    let lower = name.lowercased()
+    if let named = namedKeyCodes[lower] { return named }
+    if lower.count == 1, let scalar = lower.unicodeScalars.first { return letterKeyCode(scalar) }
+    return nil
+  }
+
+  static func flags(for modifiers: [String]) -> CGEventFlags {
+    var flags: CGEventFlags = []
+    if modifiers.contains("cmd") || modifiers.contains("command") { flags.insert(.maskCommand) }
+    if modifiers.contains("shift") { flags.insert(.maskShift) }
+    if modifiers.contains("option") || modifiers.contains("alt") { flags.insert(.maskAlternate) }
+    if modifiers.contains("control") || modifiers.contains("ctrl") { flags.insert(.maskControl) }
+    return flags
+  }
+
   private static func letterKeyCode(_ scalar: Unicode.Scalar) -> CGKeyCode? {
     let letters: [Character: CGKeyCode] = [
       "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
       "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19,
       "3": 20, "4": 21, "6": 22, "5": 23, "9": 25, "7": 26, "8": 28, "0": 29, "o": 31,
       "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
+      "=": 24, "-": 27, "]": 30, "[": 33, "'": 39, ";": 41, "\\": 42, ",": 43, "/": 44, ".": 47, "`": 50,
     ]
     return letters[Character(scalar)]
   }

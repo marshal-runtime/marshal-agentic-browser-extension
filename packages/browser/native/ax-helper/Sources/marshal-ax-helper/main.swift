@@ -223,6 +223,10 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     return errorResponse(id, "missing \"op\"")
   }
   let allowRealInput = request["allowRealInput"] as? Bool ?? false
+  // allowRealInput: real key/mouse events posted to the app in the background. allowForeground: the app may also be
+  // brought to the front (it takes the person's screen), a separate opt-in.
+  let allowForeground = request["allowForeground"] as? Bool ?? false
+  let policy = Actions.InputPolicy(background: allowRealInput, foreground: allowForeground)
   let pid = request["pid"] as? Int
   switch op {
   case "permissions":
@@ -236,8 +240,8 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     let quit = Apps.quit(pid: pid)
     return quit.found ? okResponse(id, ["exited": quit.exited]) : errorResponse(id, "no running app with that pid")
   case "focus":
-    // Bringing an app to the front is real input: only with the caller's permission.
-    guard allowRealInput else { return errorResponse(id, "focus brings the app to the front: real input not allowed") }
+    // Bringing an app to the front takes the person's screen: only with the foreground opt-in.
+    guard allowForeground else { return errorResponse(id, "focus brings the app to the front: foreground not allowed") }
     let result = Apps.focusAndEnsureWindow(bundleId: request["bundleId"] as? String, pid: pid)
     guard result.ok else { return errorResponse(id, "could not focus app") }
     var payload: [String: Any] = ["reopened": result.reopened]
@@ -255,13 +259,13 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     guard let element = cache.resolve(nodeId) else { return errorResponse(id, "unknown element \(nodeId)") }
     switch op {
     case "press":
-      return outcomeResponse(id, Actions.press(element, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "press failed")
+      return outcomeResponse(id, Actions.press(element, policy: policy, pid: pid_t(pid)), failure: "press failed")
     case "confirm":
-      return outcomeResponse(id, Actions.confirm(element, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "confirm failed")
+      return outcomeResponse(id, Actions.confirm(element, policy: policy, pid: pid_t(pid)), failure: "confirm failed")
     default:
       guard let text = request["text"] as? String else { return errorResponse(id, "missing \"text\"") }
       return outcomeResponse(
-        id, Actions.setValue(element, text: text, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "setValue failed")
+        id, Actions.setValue(element, text: text, policy: policy, pid: pid_t(pid)), failure: "setValue failed")
     }
   case "clickAt":
     // A point with no Accessibility element behind it (an OCR-only target): only a real click can reach it.
@@ -269,13 +273,37 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     guard let x = (request["x"] as? NSNumber)?.doubleValue, let y = (request["y"] as? NSNumber)?.doubleValue else {
       return errorResponse(id, "missing \"x\"/\"y\"")
     }
-    guard allowRealInput else {
-      var out = errorResponse(id, "the target has no Accessibility element: only a real click reaches it")
-      out["needsRealInput"] = true
-      return out
+    return outcomeResponse(
+      id, Actions.clickOutcome(at: CGPoint(x: x, y: y), policy: policy, pid: pid_t(pid)),
+      failure: "the target has no Accessibility element: only a real click reaches it")
+  case "keys":
+    // Keys posted to one app in the background: never activates it. The caller asked for exactly this, so it needs
+    // no allowRealInput flag; the response says which app was in front before and after.
+    guard let pid else { return errorResponse(id, "missing \"pid\"") }
+    guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
+    guard let keys = request["keys"] as? [[String: Any]], !keys.isEmpty else { return errorResponse(id, "missing \"keys\"") }
+    let before = Background.frontmostBundleId()
+    for (index, entry) in keys.enumerated() {
+      let name = entry["name"] as? String ?? ""
+      let modifiers = entry["modifiers"] as? [String] ?? []
+      guard Background.key(pid: pid_t(pid), name: name, modifiers: modifiers) else {
+        var out = errorResponse(id, "unknown key \"\(name)\" at keys[\(index)]")
+        out["frontmostBefore"] = before
+        out["frontmostAfter"] = Background.frontmostBundleId()
+        return out
+      }
     }
-    Actions.activate(pid: pid_t(pid))
-    return okResponse(id, ["realInput": Actions.click(at: CGPoint(x: x, y: y))])
+    return okResponse(id, ["frontmostBefore": before, "frontmostAfter": Background.frontmostBundleId()])
+  case "typeText":
+    guard let pid else { return errorResponse(id, "missing \"pid\"") }
+    guard kill(pid_t(pid), 0) == 0 else { return errorResponse(id, "no running app with that pid") }
+    guard let text = request["text"] as? String else { return errorResponse(id, "missing \"text\"") }
+    let before = Background.frontmostBundleId()
+    let typed = Background.type(pid: pid_t(pid), text: text)
+    var out = typed ? okResponse(id, [:]) : errorResponse(id, "could not create key events")
+    out["frontmostBefore"] = before
+    out["frontmostAfter"] = Background.frontmostBundleId()
+    return out
   case "scroll":
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     guard let win = Snapshot.window(for: AXUIElementCreateApplication(pid_t(pid))) else {
@@ -283,7 +311,7 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
     }
     let down = (request["direction"] as? String ?? "down") != "up"
     return outcomeResponse(
-      id, Actions.scroll(window: win.element, down: down, allowRealInput: allowRealInput, pid: pid_t(pid)), failure: "scroll failed")
+      id, Actions.scroll(window: win.element, down: down, policy: policy, pid: pid_t(pid)), failure: "scroll failed")
   case "screenshot":
     guard let pid else { return errorResponse(id, "missing \"pid\"") }
     do {

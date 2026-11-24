@@ -21,6 +21,18 @@ export interface AxHelperResponse {
   readonly [key: string]: unknown;
 }
 
+/** One key for the helper's `keys` op: a named key (return, tab, escape, up, home...) or one character, with modifiers. */
+export interface BackgroundKey {
+  readonly name: string;
+  readonly modifiers?: readonly ('cmd' | 'shift' | 'option' | 'alt' | 'control' | 'ctrl')[];
+}
+
+/** What the `keys` and `typeText` ops answer: the frontmost app (bundle id) right before and after the events. */
+export interface BackgroundInputResponse extends AxHelperResponse {
+  readonly frontmostBefore?: string;
+  readonly frontmostAfter?: string;
+}
+
 export interface AxHelperClientOptions {
   /** Absolute path to the marshal-ax-helper binary; resolved by the caller (config -> dist -> build dir). */
   readonly binaryPath: string;
@@ -130,6 +142,20 @@ export class AxHelperClient {
         }
       });
     });
+  }
+
+  /** Posts keys to one app in the background (CGEvent.postToPid): the app is not brought to the front. */
+  keys(
+    pid: number,
+    keys: readonly BackgroundKey[],
+    timeoutMs?: number,
+  ): Promise<BackgroundInputResponse> {
+    return this.call({ op: 'keys', pid, keys }, timeoutMs);
+  }
+
+  /** Types unicode text into one app's focused field in the background; the app is not brought to the front. */
+  typeText(pid: number, text: string, timeoutMs?: number): Promise<BackgroundInputResponse> {
+    return this.call({ op: 'typeText', pid, text }, timeoutMs ?? 10_000 + text.length * 20);
   }
 
   /** One retry after a crash: a call whose process died mid-flight is safe to reissue against a fresh process. */
