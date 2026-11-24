@@ -281,7 +281,7 @@ enum Actions {
   /// Captures the app's window (ScreenCaptureKit; it never raises the window) with the geometry needed to map screen
   /// points onto the image.
   static func captureWindow(pid: Int?) throws -> (image: CGImage, originX: Double, originY: Double, scale: Double) {
-    let targetPid = pid ?? Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+    let targetPid = pid ?? Int(Background.frontmostApplication()?.processIdentifier ?? 0)
     let windowInfoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     let candidates = windowInfoList.filter { ($0[kCGWindowOwnerPID as String] as? Int) == targetPid }
     // Same desktop-pseudo-window problem as Snapshot.window(for:): skip any

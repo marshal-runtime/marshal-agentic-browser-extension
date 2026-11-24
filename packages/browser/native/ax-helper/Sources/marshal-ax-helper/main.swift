@@ -250,7 +250,7 @@ func handleRequest(_ request: [String: Any]) -> [String: Any] {
   guard actingOps.contains(op), let pid = request["pid"] as? Int, request["allowForeground"] as? Bool != true else {
     return dispatch(request)
   }
-  let before = NSWorkspace.shared.frontmostApplication
+  let before = Background.frontmostApplication()
   var response = dispatch(request)
   guard let before, before.processIdentifier != pid_t(pid) else { return response }
   if Background.targetCameForward(target: pid_t(pid)) { response["targetCameForward"] = true }
